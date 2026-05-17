@@ -18,6 +18,7 @@ export default function Home() {
   const [ocrText, setOcrText] = useState("");
   const [artwork, setArtwork] = useState(null);
 
+  const [scanHint, setScanHint] = useState("");
   const [questionOpen, setQuestionOpen] = useState(false);
   const [question, setQuestion] = useState("");
   const [chat, setChat] = useState([]);
@@ -46,6 +47,8 @@ export default function Home() {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: "environment",
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
         },
         audio: false,
       });
@@ -73,6 +76,164 @@ export default function Home() {
     setCameraOn(false);
   };
 
+  const preprocessCanvas = (ctx, width, height) => {
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const data = imageData.data;
+
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+
+      let gray = 0.299 * r + 0.587 * g + 0.114 * b;
+
+      gray = (gray - 128) * 1.45 + 128;
+      gray = gray > 150 ? 255 : 0;
+
+      data[i] = gray;
+      data[i + 1] = gray;
+      data[i + 2] = gray;
+    }
+
+    ctx.putImageData(imageData, 0, 0);
+  };
+
+  const createEnhancedOcrCanvas = () => {
+    const video = videoRef.current;
+    const baseCanvas = canvasRef.current;
+
+    if (!video || !baseCanvas) return null;
+
+    const videoWidth = video.videoWidth;
+    const videoHeight = video.videoHeight;
+
+    if (!videoWidth || !videoHeight) return null;
+
+    const baseCtx = baseCanvas.getContext("2d");
+    baseCanvas.width = videoWidth;
+    baseCanvas.height = videoHeight;
+    baseCtx.drawImage(video, 0, 0, videoWidth, videoHeight);
+
+    const regions = [
+      {
+        name: "full",
+        x: 0,
+        y: 0,
+        w: videoWidth,
+        h: videoHeight,
+        scaleW: 1200,
+      },
+      {
+        name: "middle",
+        x: videoWidth * 0.05,
+        y: videoHeight * 0.18,
+        w: videoWidth * 0.9,
+        h: videoHeight * 0.46,
+        scaleW: 1200,
+      },
+      {
+        name: "lower",
+        x: videoWidth * 0.05,
+        y: videoHeight * 0.42,
+        w: videoWidth * 0.9,
+        h: videoHeight * 0.42,
+        scaleW: 1200,
+      },
+    ];
+
+    const processedParts = regions.map((region) => {
+      const partCanvas = document.createElement("canvas");
+      const partScale = region.scaleW / region.w;
+      const partWidth = region.scaleW;
+      const partHeight = Math.max(1, Math.round(region.h * partScale));
+
+      partCanvas.width = partWidth;
+      partCanvas.height = partHeight;
+
+      const partCtx = partCanvas.getContext("2d");
+      partCtx.drawImage(
+        baseCanvas,
+        region.x,
+        region.y,
+        region.w,
+        region.h,
+        0,
+        0,
+        partWidth,
+        partHeight
+      );
+
+      preprocessCanvas(partCtx, partWidth, partHeight);
+
+      return {
+        canvas: partCanvas,
+        width: partWidth,
+        height: partHeight,
+      };
+    });
+
+    const gap = 36;
+    const combinedWidth = 1200;
+    const combinedHeight =
+      processedParts.reduce((sum, part) => sum + part.height, 0) +
+      gap * (processedParts.length - 1);
+
+    const combinedCanvas = document.createElement("canvas");
+    combinedCanvas.width = combinedWidth;
+    combinedCanvas.height = combinedHeight;
+
+    const combinedCtx = combinedCanvas.getContext("2d");
+    combinedCtx.fillStyle = "#ffffff";
+    combinedCtx.fillRect(0, 0, combinedWidth, combinedHeight);
+
+    let currentY = 0;
+
+    processedParts.forEach((part, index) => {
+      combinedCtx.drawImage(part.canvas, 0, currentY, part.width, part.height);
+      currentY += part.height;
+
+      if (index < processedParts.length - 1) {
+        combinedCtx.fillStyle = "#ffffff";
+        combinedCtx.fillRect(0, currentY, combinedWidth, gap);
+        currentY += gap;
+      }
+    });
+
+    return combinedCanvas;
+  };
+
+  const normalizeOcrText = (text) => {
+    if (!text) return "";
+
+    return text
+      .replace(/[|{}[\]<>]/g, " ")
+      .replace(/\s+/g, " ")
+      .replace(/([A-Za-z])\s+([.,;:])/g, "$1$2")
+      .trim();
+  };
+
+  const isOcrUsable = (text, confidence) => {
+    const cleanText = normalizeOcrText(text);
+
+    const hasEnoughLength = cleanText.length >= 12;
+    const hasAlphabetOrKorean = /[A-Za-z가-힣]/.test(cleanText);
+    const hasLikelyCaptionSignal =
+      /artist|title|oil|canvas|museum|louvre|gallery|collection|born|painted|작가|작품|미술관|소장|제작|연도/i.test(
+        cleanText
+      ) || cleanText.split(" ").length >= 4;
+
+    const confidenceOkay = Number.isFinite(confidence)
+      ? confidence >= 25
+      : true;
+
+    return (
+      hasEnoughLength &&
+      hasAlphabetOrKorean &&
+      hasLikelyCaptionSignal &&
+      confidenceOkay
+    );
+  };
+
   const captureAndOCR = async () => {
     if (!videoRef.current || !canvasRef.current) return;
 
@@ -81,31 +242,40 @@ export default function Home() {
     setOcrText("");
     setArtwork(null);
     setChat([]);
-
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    setScanHint("");
 
     try {
-      const result = await Tesseract.recognize(canvas, "eng+kor+fra+jpn", {
+      const ocrCanvas = createEnhancedOcrCanvas();
+
+      if (!ocrCanvas) {
+        alert("카메라 화면을 캡처하지 못했습니다. 다시 시도해주세요.");
+        return;
+      }
+
+      const result = await Tesseract.recognize(ocrCanvas, "eng+kor+fra+jpn", {
         logger: (m) => console.log(m),
+        tessedit_pageseg_mode: "6",
       });
 
-      const text = result.data.text.trim();
+      const rawText = result.data.text || "";
+      const confidence = result.data.confidence;
+      const text = normalizeOcrText(rawText);
 
-      if (!text || text.length < 3) {
-        alert("캡션 글자가 잘 인식되지 않았습니다. 더 가까이 촬영해주세요.");
+      if (!isOcrUsable(text, confidence)) {
+        setScanHint(
+          "캡션 인식이 명확하지 않습니다. 작품명과 작가명이 선명하게 보이도록 더 가까이, 정면에서 다시 촬영해주세요."
+        );
         return;
       }
 
       setOcrText(text);
       setOcrLoading(false);
       setAiLoading(true);
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+      }, 30000);
 
       const response = await fetch("/api/explain", {
         method: "POST",
@@ -116,7 +286,10 @@ export default function Home() {
           ocrText: text,
           userProfile,
         }),
+        signal: controller.signal,
       });
+
+      clearTimeout(timeoutId);
 
       const data = await response.json();
 
@@ -129,14 +302,23 @@ export default function Home() {
       setChat([
         {
           role: "ai",
-          text: `OCR 캡션을 바탕으로 「${data.title}」 작품 정보를 분석했어요. 분석 신뢰도는 ${data.confidence}입니다.`,
+          text: `OCR 결과를 바탕으로 「${data.title}」 작품 정보를 분석했어요. 분석 신뢰도는 ${data.confidence}입니다.`,
         },
       ]);
 
       setScreen("explain");
     } catch (error) {
       console.error(error);
-      alert(error.message || "OCR 또는 AI 해설 생성 중 오류가 발생했습니다.");
+
+      if (error.name === "AbortError") {
+        setScanHint(
+          "AI 해설 생성 시간이 너무 오래 걸립니다. 잠시 후 다시 시도해주세요."
+        );
+      } else {
+        setScanHint(
+          error.message || "OCR 또는 AI 해설 생성 중 오류가 발생했습니다."
+        );
+      }
     } finally {
       setOcrLoading(false);
       setAiLoading(false);
@@ -244,7 +426,9 @@ export default function Home() {
             <div className="corner top-right" />
             <div className="corner bottom-left" />
             <div className="corner bottom-right" />
-            <div className="guide-text">작품 캡션을 이 영역에 맞춰주세요</div>
+            <div className="guide-text">
+              작품명과 작가명이 선명하게 보이도록 맞춰주세요
+            </div>
           </div>
 
           {ocrLoading && (
@@ -255,10 +439,15 @@ export default function Home() {
             <div className="loading-toast">작품 해설을 생성 중입니다...</div>
           )}
 
-          {ocrText && !aiLoading && (
-            <div className="ocr-preview-card">
-              <div className="card-label">OCR 인식 캡션</div>
-              <p>{ocrText}</p>
+          {scanHint && (
+            <div className="scan-hint-card">
+              <div className="scan-hint-title">다시 촬영해주세요</div>
+              <p>{scanHint}</p>
+              <div className="scan-hint-list">
+                <span>• 캡션을 더 가까이 비추기</span>
+                <span>• 휴대폰을 흔들지 않기</span>
+                <span>• 작품명과 작가명이 화면에 들어오게 하기</span>
+              </div>
             </div>
           )}
 
@@ -351,9 +540,28 @@ export default function Home() {
             <p className="summary">{artwork.summary}</p>
           </section>
 
-          <section className="ocr-text-box">
-            <div className="section-title">인식된 캡션 원문</div>
-            <p>{ocrText}</p>
+          <section className="detected-info-box">
+            <div className="section-title">인식된 작품 정보</div>
+
+            <div className="info-row">
+              <span>작품명</span>
+              <strong>{artwork.title || "확인 필요"}</strong>
+            </div>
+
+            <div className="info-row">
+              <span>작가</span>
+              <strong>{artwork.artist || "확인 필요"}</strong>
+            </div>
+
+            <div className="info-row">
+              <span>제작연도</span>
+              <strong>{artwork.year || "확인 필요"}</strong>
+            </div>
+
+            <div className="info-row">
+              <span>소장처</span>
+              <strong>{artwork.museum || "확인 필요"}</strong>
+            </div>
           </section>
 
           <section className="explain-card">
@@ -632,34 +840,41 @@ export default function Home() {
           white-space: nowrap;
         }
 
-        .ocr-preview-card {
+        .scan-hint-card {
           position: absolute;
-          z-index: 6;
-          top: 16%;
-          left: 18px;
-          width: 310px;
-          max-height: 170px;
-          overflow-y: auto;
+          z-index: 8;
+          left: 20px;
+          right: 20px;
+          top: 108px;
           padding: 18px;
-          border-radius: 20px;
-          background: rgba(255, 255, 255, 0.92);
+          border-radius: 22px;
+          background: rgba(255, 255, 255, 0.94);
           color: #171729;
           backdrop-filter: blur(18px);
-          box-shadow: 0 18px 40px rgba(0, 0, 0, 0.22);
+          box-shadow: 0 18px 45px rgba(0, 0, 0, 0.25);
         }
 
-        .card-label {
-          margin-bottom: 8px;
-          color: #6f5de8;
-          font-size: 13px;
+        .scan-hint-title {
+          color: #7254e8;
+          font-size: 16px;
           font-weight: 900;
+          margin-bottom: 8px;
         }
 
-        .ocr-preview-card p {
+        .scan-hint-card p {
           margin: 0;
-          color: #343243;
-          font-size: 15px;
+          color: #3f3b4f;
+          font-size: 14px;
           line-height: 1.55;
+        }
+
+        .scan-hint-list {
+          display: grid;
+          gap: 5px;
+          margin-top: 12px;
+          color: #69657a;
+          font-size: 13px;
+          font-weight: 700;
         }
 
         .language-pill {
@@ -867,7 +1082,7 @@ export default function Home() {
           letter-spacing: -0.04em;
         }
 
-        .ocr-text-box,
+        .detected-info-box,
         .explain-card {
           margin-top: 18px;
           padding: 20px;
@@ -885,7 +1100,34 @@ export default function Home() {
           letter-spacing: -0.04em;
         }
 
-        .ocr-text-box p,
+        .info-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 16px;
+          padding: 13px 0;
+          border-bottom: 1px solid #eeeaf4;
+        }
+
+        .info-row:last-child {
+          border-bottom: none;
+        }
+
+        .info-row span {
+          color: #8a869c;
+          font-size: 14px;
+          font-weight: 800;
+          flex-shrink: 0;
+        }
+
+        .info-row strong {
+          color: #171729;
+          font-size: 15px;
+          font-weight: 900;
+          text-align: right;
+          line-height: 1.4;
+        }
+
         .explain-card p {
           margin: 0;
           color: #444153;
@@ -916,6 +1158,13 @@ export default function Home() {
           font-size: 13px;
           font-weight: 900;
           flex-shrink: 0;
+        }
+
+        .viewing-point p {
+          margin: 0;
+          color: #444153;
+          font-size: 16px;
+          line-height: 1.65;
         }
 
         .bottom-action-area {
