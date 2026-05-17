@@ -90,35 +90,69 @@ export default function Home() {
     );
   };
 
-  const buildFallbackArtwork = (text) => {
-    const words = text
-      ? text
-          .split(/\s+/)
-          .filter(Boolean)
-          .slice(0, 10)
-          .join(" ")
-      : "";
+  const normalizeOcrText = (text) => {
+    if (!text) return "";
+
+    return text
+      .replace(/[|{}[\]<>]/g, " ")
+      .replace(/[^\S\r\n]+/g, " ")
+      .replace(/\s+/g, " ")
+      .replace(/([A-Za-z])\s+([.,;:])/g, "$1$2")
+      .trim();
+  };
+
+  const extractPossibleInfoFromOcr = (text) => {
+    const cleaned = normalizeOcrText(text);
+    const words = cleaned.split(/\s+/).filter(Boolean);
+
+    const yearMatch = cleaned.match(/\b(1[3-9]\d{2}|20\d{2})\b/);
+    const year = yearMatch ? yearMatch[0] : "";
+
+    const properWords = words.filter((word) => {
+      return /^[A-Z][A-Za-zÀ-ÿ'-]{2,}$/.test(word);
+    });
+
+    const possibleTitle = words
+      .filter((word) => !/^(oil|canvas|museum|gallery|collection|artist|title|born|died|active|french|italian|spanish|british|american)$/i.test(word))
+      .slice(0, 7)
+      .join(" ");
+
+    const possibleArtist = properWords.slice(0, 4).join(" ");
 
     return {
-      title: words || "인식된 작품",
-      artist: "",
-      year: "",
+      possibleTitle,
+      possibleArtist,
+      year,
+      cleaned,
+    };
+  };
+
+  const buildFallbackArtwork = (text) => {
+    const { possibleTitle, possibleArtist, year, cleaned } =
+      extractPossibleInfoFromOcr(text);
+
+    return {
+      title: possibleTitle || "인식된 작품",
+      artist: possibleArtist,
+      year,
       museum: "",
-      summary:
-        "카메라로 인식한 캡션 정보를 바탕으로 작품의 시각적 특징과 전시 맥락을 중심으로 감상할 수 있습니다.",
-      simpleExplanation:
-        "이 작품은 화면에 보이는 인물, 색감, 구도, 소재를 중심으로 감상할 수 있습니다. 먼저 작품에서 가장 눈에 띄는 대상이 무엇인지 살펴보면 좋습니다. 이후 주변 배경과 인물의 자세, 시선 방향을 함께 보면 작품이 전달하려는 분위기를 더 쉽게 이해할 수 있습니다. 캡션 정보가 일부만 인식된 경우에도 작품의 형식과 표현 방식은 충분히 감상 포인트가 될 수 있습니다. 특히 전시장에서는 작품이 놓인 위치, 주변 작품과의 연결성, 시대적 분위기를 함께 보는 것이 중요합니다.",
-      artistDescription:
-        "작가 정보가 명확히 인식되지 않은 경우에는 작품의 표현 방식에서 단서를 찾을 수 있습니다. 붓질이 섬세한지, 색면이 강한지, 인물 표현이 사실적인지에 따라 작가가 속한 미술사적 흐름을 추정할 수 있습니다. 작품을 볼 때는 작가 이름 자체보다도 어떤 방식으로 대상을 해석했는지에 집중하면 감상이 쉬워집니다.",
+      summary: `${possibleTitle || "이 작품"}은 캡션에서 인식된 정보를 바탕으로 감상할 수 있는 작품입니다.`,
+      simpleExplanation: `카메라가 인식한 캡션에는 “${cleaned.slice(
+        0,
+        180
+      )}”라는 정보가 포함되어 있습니다. 이 정보를 기준으로 작품명, 작가명, 제작 시기, 전시 맥락을 연결해 감상할 수 있습니다. 작품을 볼 때는 먼저 화면에서 가장 눈에 띄는 대상과 전체 구도를 살펴보는 것이 좋습니다. 이후 색감, 명암, 인물의 자세, 배경의 구성 등을 함께 보면 작품이 전달하려는 분위기가 더 잘 드러납니다. 캡션의 일부가 정확하지 않더라도, 인식된 제목과 작가명으로 보이는 단어를 중심으로 작품의 주제와 표현 방식을 추정할 수 있습니다.`,
+      artistDescription: possibleArtist
+        ? `${possibleArtist}로 인식된 작가명을 기준으로 작품을 이해할 수 있습니다. 작가의 세부 정보가 완전히 인식되지 않더라도, 작품의 표현 방식과 주제에서 미술사적 단서를 찾을 수 있습니다. 인물 표현, 색감, 구도, 재료를 함께 보면 작가가 어떤 방식으로 대상을 해석했는지 파악하기 쉽습니다.`
+        : "",
       artistIntention:
-        "작가는 보통 단순히 대상을 재현하는 것을 넘어 특정한 분위기, 감정, 시선, 상징을 전달하려 합니다. 이 작품도 화면 구성과 표현 방식 안에서 관람자가 어떤 지점에 주목하도록 유도합니다. 작품의 중심부, 빛이 닿는 부분, 인물이나 대상의 방향을 따라가면 작가가 강조한 부분을 더 잘 이해할 수 있습니다.",
+        "작가는 작품 속 대상이나 장면을 단순히 기록하기보다, 특정한 분위기와 시선을 전달하려 했을 가능성이 큽니다. 작품의 중심부, 빛이 닿는 부분, 인물이나 사물의 방향을 따라가면 작가가 강조하고 싶은 지점을 찾을 수 있습니다. 캡션의 제목 단어와 화면 속 표현을 연결해 보면 작품의 의도가 더 선명해집니다.",
       background:
-        "작품의 배경은 제작 시기와 전시 맥락을 함께 볼 때 더 잘 드러납니다. 같은 전시실에 놓인 작품들과 비교하면 이 작품이 어떤 시대적 흐름 안에 있는지 파악하기 쉽습니다. 캡션이 완벽하게 인식되지 않아도 재료, 구도, 주제, 표현 방식은 작품 이해에 중요한 단서가 됩니다.",
+        "이 작품은 캡션에 포함된 제작연도, 소장처, 작가명 같은 정보를 함께 볼 때 더 잘 이해할 수 있습니다. 전시장에서는 같은 공간의 다른 작품들과 비교해 시대적 흐름과 주제의 차이를 살펴보는 것이 좋습니다. 작품의 재료와 표현 방식도 제작 배경을 이해하는 중요한 단서가 됩니다.",
       viewingPoints: [
-        "작품에서 가장 먼저 시선이 가는 대상을 확인해보세요.",
-        "색감과 명암이 어떤 분위기를 만드는지 살펴보세요.",
-        "인물이나 대상의 자세와 방향이 무엇을 암시하는지 보세요.",
-        "주변 작품과 비교해 이 작품만의 차이를 찾아보세요.",
+        "캡션에서 작품명으로 보이는 단어와 화면 속 중심 대상을 연결해보세요.",
+        "작가명으로 보이는 고유명사를 기준으로 작품의 시대와 양식을 추정해보세요.",
+        "색감, 명암, 인물의 자세, 사물의 배치를 함께 살펴보세요.",
+        "주변 작품과 비교해 이 작품만의 분위기와 표현 방식을 찾아보세요.",
       ],
       answer: "",
       confidence: "보통",
@@ -172,7 +206,6 @@ export default function Home() {
       const b = data[i + 2];
 
       let gray = 0.299 * r + 0.587 * g + 0.114 * b;
-
       gray = (gray - 128) * 1.25 + 128;
 
       data[i] = gray;
@@ -238,17 +271,6 @@ export default function Home() {
     return ocrCanvas;
   };
 
-  const normalizeOcrText = (text) => {
-    if (!text) return "";
-
-    return text
-      .replace(/[|{}[\]<>]/g, " ")
-      .replace(/[^\S\r\n]+/g, " ")
-      .replace(/\s+/g, " ")
-      .replace(/([A-Za-z])\s+([.,;:])/g, "$1$2")
-      .trim();
-  };
-
   const captureAndOCR = async () => {
     if (!videoRef.current || !canvasRef.current) return;
 
@@ -269,13 +291,11 @@ export default function Home() {
           tessedit_pageseg_mode: "6",
         });
 
-        const rawText = result?.data?.text || "";
-        finalOcrText = normalizeOcrText(rawText);
+        finalOcrText = normalizeOcrText(result?.data?.text || "");
       }
 
       if (!finalOcrText || finalOcrText.length < 2) {
-        finalOcrText =
-          "museum artwork caption partially visible title artist information";
+        finalOcrText = "museum artwork caption title artist";
       }
 
       setOcrText(finalOcrText);
@@ -286,9 +306,7 @@ export default function Home() {
 
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => {
-          controller.abort();
-        }, 30000);
+        const timeoutId = setTimeout(() => controller.abort(), 30000);
 
         const response = await fetch("/api/explain", {
           method: "POST",
@@ -313,7 +331,12 @@ export default function Home() {
         console.error(apiError);
       }
 
-      if (!data) {
+      if (
+        !data ||
+        (!cleanValue(data.title) &&
+          !cleanValue(data.artist) &&
+          !cleanValue(data.simpleExplanation))
+      ) {
         data = buildFallbackArtwork(finalOcrText);
       }
 
