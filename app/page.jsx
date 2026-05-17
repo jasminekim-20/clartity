@@ -8,24 +8,24 @@ export default function Home() {
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
 
+  const [screen, setScreen] = useState("camera");
+  const [mode, setMode] = useState("camera");
+
   const [cameraOn, setCameraOn] = useState(false);
   const [ocrLoading, setOcrLoading] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+
   const [ocrText, setOcrText] = useState("");
-  const [mode, setMode] = useState("camera");
-  const [showResult, setShowResult] = useState(false);
+  const [artwork, setArtwork] = useState(null);
+
   const [questionOpen, setQuestionOpen] = useState(false);
   const [question, setQuestion] = useState("");
   const [chat, setChat] = useState([]);
 
-  const artwork = {
-    title: "수련 연못",
-    artist: "Claude Monet",
-    museum: "오르세 미술관",
-    year: "1899",
-    explanation:
-      "클로드 모네는 ‘수련’ 연작을 통해 빛과 시간의 변화를 탐구했습니다. 이 작품은 자연의 고요함과 순간의 아름다움을 담고 있어요.",
-    intention:
-      "모네는 연못을 정확히 묘사하기보다, 물 위에 비친 빛과 공기의 흐름처럼 순간적으로 변하는 인상을 포착하려 했습니다.",
+  const userProfile = {
+    level: "미술 입문자",
+    taste: "감성적·스토리 중심 설명 선호",
+    age: "20-30대 관람객",
   };
 
   useEffect(() => {
@@ -38,6 +38,11 @@ export default function Home() {
 
   const startCamera = async () => {
     try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert("이 브라우저에서는 카메라 기능을 사용할 수 없습니다.");
+        return;
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: "environment",
@@ -72,8 +77,10 @@ export default function Home() {
     if (!videoRef.current || !canvasRef.current) return;
 
     setOcrLoading(true);
-    setShowResult(false);
+    setAiLoading(false);
     setOcrText("");
+    setArtwork(null);
+    setChat([]);
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -85,139 +92,349 @@ export default function Home() {
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     try {
-      const result = await Tesseract.recognize(canvas, "eng+kor+fra", {
+      const result = await Tesseract.recognize(canvas, "eng+kor+fra+jpn", {
         logger: (m) => console.log(m),
       });
 
       const text = result.data.text.trim();
 
-      setOcrText(
-        text ||
-          "Claude Monet explore les variations de la lumière et du temps à travers sa série des Nymphéas."
-      );
+      if (!text || text.length < 3) {
+        alert("캡션 글자가 잘 인식되지 않았습니다. 더 가까이 촬영해주세요.");
+        return;
+      }
 
-      setShowResult(true);
+      setOcrText(text);
+      setOcrLoading(false);
+      setAiLoading(true);
+
+      const response = await fetch("/api/explain", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ocrText: text,
+          userProfile,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "AI 해설 생성에 실패했습니다.");
+      }
+
+      setArtwork(data);
 
       setChat([
         {
           role: "ai",
-          text: "캡션을 인식했어요. 이 작품은 클로드 모네의 「수련 연못」으로 추정됩니다.",
+          text: `OCR 캡션을 바탕으로 「${data.title}」 작품 정보를 분석했어요. 분석 신뢰도는 ${data.confidence}입니다.`,
         },
       ]);
+
+      setScreen("explain");
     } catch (error) {
       console.error(error);
-      alert("OCR 인식 중 오류가 발생했습니다.");
+      alert(error.message || "OCR 또는 AI 해설 생성 중 오류가 발생했습니다.");
     } finally {
       setOcrLoading(false);
+      setAiLoading(false);
     }
   };
 
-  const askQuestion = () => {
+  const askQuestion = async () => {
     if (!question.trim()) return;
 
-    const q = question.trim();
-
-    let answer =
-      "이 작품은 자연을 그대로 복사한 그림이라기보다, 빛과 공기, 시간의 흐름이 만들어내는 순간의 느낌을 보여주는 작품입니다.";
-
-    if (q.includes("의도") || q.includes("작가")) {
-      answer = artwork.intention;
+    if (!ocrText) {
+      alert("먼저 작품 캡션을 인식해주세요.");
+      return;
     }
 
-    if (q.includes("왜") || q.includes("유명")) {
-      answer =
-        "이 작품이 유명한 이유는 모네가 ‘대상을 정확히 그리는 방식’보다 ‘순간의 인상과 분위기를 그리는 방식’을 보여줬기 때문입니다. 이것이 인상주의의 핵심과 연결됩니다.";
-    }
+    const userQuestion = question.trim();
 
     setChat((prev) => [
       ...prev,
       {
         role: "user",
-        text: q,
-      },
-      {
-        role: "ai",
-        text: answer,
+        text: userQuestion,
       },
     ]);
 
     setQuestion("");
+
+    try {
+      const response = await fetch("/api/explain", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ocrText,
+          userProfile,
+          question: userQuestion,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "질문 답변 생성에 실패했습니다.");
+      }
+
+      setChat((prev) => [
+        ...prev,
+        {
+          role: "ai",
+          text:
+            data.answer ||
+            data.simpleExplanation ||
+            data.explanation ||
+            data.summary ||
+            "이 작품에 대한 추가 설명을 생성했습니다.",
+        },
+      ]);
+    } catch (error) {
+      console.error(error);
+
+      setChat((prev) => [
+        ...prev,
+        {
+          role: "ai",
+          text: "질문에 답변하는 중 오류가 발생했습니다.",
+        },
+      ]);
+    }
   };
 
   return (
-    <main className="camera-app">
-      <video ref={videoRef} className="camera-video" playsInline muted autoPlay />
-      <canvas ref={canvasRef} style={{ display: "none" }} />
+    <main className="app">
+      {screen === "camera" && (
+        <section className="camera-screen">
+          <video
+            ref={videoRef}
+            className="camera-video"
+            playsInline
+            muted
+            autoPlay
+          />
 
-      {!cameraOn && (
-        <div className="camera-fallback">
-          <p>카메라를 불러오는 중입니다.</p>
-          <button onClick={startCamera}>카메라 다시 켜기</button>
-        </div>
-      )}
+          <canvas ref={canvasRef} style={{ display: "none" }} />
 
-      <div className="top-bar">
-        <button className="icon-btn">‹</button>
-
-        <div className="app-pill">
-          <span className="app-dot" />
-          Clartatity
-        </div>
-
-        <button className="icon-btn">?</button>
-      </div>
-
-      <div className="scan-guide">
-        <div className="corner top-left" />
-        <div className="corner top-right" />
-        <div className="corner bottom-left" />
-        <div className="corner bottom-right" />
-
-        <div className="guide-text">작품 캡션을 이 영역에 맞춰주세요</div>
-      </div>
-
-      {ocrLoading && (
-        <div className="loading-toast">캡션을 읽는 중입니다...</div>
-      )}
-
-      {showResult && (
-        <>
-          <div className="caption-card original">
-            <div className="card-label">OCR 인식 캡션</div>
-            <p>
-              {ocrText ||
-                "Claude Monet explore les variations de la lumière et du temps à travers sa série des Nymphéas."}
-            </p>
-          </div>
-
-          <div className="caption-card translated">
-            <div className="card-label">AI 맞춤 해설</div>
-            <h2>{artwork.title}</h2>
-            <p>
-              <b>{artwork.artist}</b> · {artwork.museum} · {artwork.year}
-            </p>
-            <p>{artwork.explanation}</p>
-
-            <div className="mini-actions">
-              <button onClick={() => setQuestionOpen(true)}>AI에게 질문</button>
-              <button>기록 저장</button>
+          {!cameraOn && (
+            <div className="camera-fallback">
+              <p>카메라를 불러오는 중입니다.</p>
+              <button onClick={startCamera}>카메라 다시 켜기</button>
             </div>
+          )}
+
+          <div className="top-bar">
+            <button className="icon-btn">‹</button>
+
+            <div className="app-pill">
+              <span className="app-dot" />
+              Clartatity
+            </div>
+
+            <button className="icon-btn">?</button>
           </div>
-        </>
+
+          <div className="scan-guide">
+            <div className="corner top-left" />
+            <div className="corner top-right" />
+            <div className="corner bottom-left" />
+            <div className="corner bottom-right" />
+            <div className="guide-text">작품 캡션을 이 영역에 맞춰주세요</div>
+          </div>
+
+          {ocrLoading && (
+            <div className="loading-toast">캡션 글자를 읽는 중입니다...</div>
+          )}
+
+          {aiLoading && (
+            <div className="loading-toast">작품 해설을 생성 중입니다...</div>
+          )}
+
+          {ocrText && !aiLoading && (
+            <div className="ocr-preview-card">
+              <div className="card-label">OCR 인식 캡션</div>
+              <p>{ocrText}</p>
+            </div>
+          )}
+
+          <div className="language-pill">
+            캡션 OCR <span>⌄</span>
+            <b>→</b>
+            맞춤 해설 <span>⌄</span>
+          </div>
+
+          <div className="camera-controls">
+            <button className="round-control">▧</button>
+
+            <button className="shutter" onClick={captureAndOCR}>
+              <span />
+            </button>
+
+            <button className="round-control">⌁</button>
+          </div>
+
+          <nav className="bottom-tabs">
+            <button
+              className={mode === "translate" ? "active" : ""}
+              onClick={() => setMode("translate")}
+            >
+              <span>▣</span>
+              번역
+            </button>
+
+            <button
+              className={mode === "camera" ? "active" : ""}
+              onClick={() => setMode("camera")}
+            >
+              <span>●</span>
+              카메라
+            </button>
+
+            <button
+              className={mode === "chat" ? "active" : ""}
+              onClick={() => {
+                setMode("chat");
+                setQuestionOpen(true);
+              }}
+            >
+              <span>👥</span>
+              대화
+            </button>
+
+            <button
+              className={mode === "save" ? "active" : ""}
+              onClick={() => setMode("save")}
+            >
+              <span>★</span>
+              저장
+            </button>
+          </nav>
+        </section>
+      )}
+
+      {screen === "explain" && artwork && (
+        <section className="explain-screen">
+          <header className="explain-header">
+            <button
+              onClick={() => {
+                setScreen("camera");
+                setTimeout(() => startCamera(), 300);
+              }}
+            >
+              ‹
+            </button>
+
+            <div>
+              <div className="explain-title-mini">AI 작품 해설</div>
+              <div className="explain-sub-mini">OCR Caption Based Guide</div>
+            </div>
+
+            <button onClick={() => setQuestionOpen(true)}>?</button>
+          </header>
+
+          <section className="artwork-hero">
+            <div className="badge">✨ 분석 신뢰도 {artwork.confidence}</div>
+
+            <h1>{artwork.title}</h1>
+
+            <p className="artist-line">
+              <b>{artwork.artist}</b>
+              <br />
+              {artwork.museum} · {artwork.year}
+            </p>
+
+            <p className="summary">{artwork.summary}</p>
+          </section>
+
+          <section className="ocr-text-box">
+            <div className="section-title">인식된 캡션 원문</div>
+            <p>{ocrText}</p>
+          </section>
+
+          <section className="explain-card">
+            <div className="section-title">간단한 작품 해설</div>
+            <p>
+              {artwork.simpleExplanation ||
+                artwork.explanation ||
+                "작품 해설을 생성하지 못했습니다."}
+            </p>
+          </section>
+
+          <section className="explain-card">
+            <div className="section-title">작가 설명</div>
+            <p>
+              {artwork.artistDescription ||
+                "작가 정보는 추가 확인이 필요합니다."}
+            </p>
+          </section>
+
+          <section className="explain-card">
+            <div className="section-title">작가의 의도</div>
+            <p>
+              {artwork.artistIntention ||
+                "작가의 의도는 추가 확인이 필요합니다."}
+            </p>
+          </section>
+
+          <section className="explain-card">
+            <div className="section-title">배경 설명</div>
+            <p>
+              {artwork.background ||
+                "작품의 시대적·전시적 배경은 추가 확인이 필요합니다."}
+            </p>
+          </section>
+
+          {artwork.viewingPoints?.length > 0 && (
+            <section className="explain-card">
+              <div className="section-title">감상 포인트</div>
+
+              <div className="viewing-points">
+                {artwork.viewingPoints.map((point, index) => (
+                  <div key={index} className="viewing-point">
+                    <span>{index + 1}</span>
+                    <p>{point}</p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          <div className="bottom-action-area">
+            <button
+              className="ghost-action"
+              onClick={() => setQuestionOpen(true)}
+            >
+              AI에게 질문
+            </button>
+            <button className="primary-action">기록에 저장</button>
+          </div>
+        </section>
       )}
 
       {questionOpen && (
         <div className="chat-sheet">
           <div className="sheet-handle" />
+
           <div className="sheet-header">
             <div>
               <h3>작품에 대해 질문하기</h3>
-              <p>미술 입문자 기준으로 쉽게 답변합니다.</p>
+              <p>인식된 캡션을 바탕으로 답변합니다.</p>
             </div>
             <button onClick={() => setQuestionOpen(false)}>×</button>
           </div>
 
           <div className="chat-list">
+            {chat.length === 0 && (
+              <div className="bubble ai">
+                먼저 작품 캡션을 촬영하면 해당 작품에 대해 질문할 수 있어요.
+              </div>
+            )}
+
             {chat.map((m, i) => (
               <div key={i} className={`bubble ${m.role}`}>
                 {m.text}
@@ -229,7 +446,7 @@ export default function Home() {
             <input
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
-              placeholder="예: 왜 이 작품이 유명해?"
+              placeholder="예: 이 작품은 왜 유명해?"
               onKeyDown={(e) => {
                 if (e.key === "Enter") askQuestion();
               }}
@@ -238,59 +455,6 @@ export default function Home() {
           </div>
         </div>
       )}
-
-      <div className="language-pill">
-        프랑스어 <span>⌄</span>
-        <b>→</b>
-        한국어 <span>⌄</span>
-      </div>
-
-      <div className="camera-controls">
-        <button className="round-control">▧</button>
-
-        <button className="shutter" onClick={captureAndOCR}>
-          <span />
-        </button>
-
-        <button className="round-control">⌁</button>
-      </div>
-
-      <nav className="bottom-tabs">
-        <button
-          className={mode === "translate" ? "active" : ""}
-          onClick={() => setMode("translate")}
-        >
-          <span>▣</span>
-          번역
-        </button>
-
-        <button
-          className={mode === "camera" ? "active" : ""}
-          onClick={() => setMode("camera")}
-        >
-          <span>●</span>
-          카메라
-        </button>
-
-        <button
-          className={mode === "chat" ? "active" : ""}
-          onClick={() => {
-            setMode("chat");
-            setQuestionOpen(true);
-          }}
-        >
-          <span>👥</span>
-          대화
-        </button>
-
-        <button
-          className={mode === "save" ? "active" : ""}
-          onClick={() => setMode("save")}
-        >
-          <span>★</span>
-          즐겨찾기
-        </button>
-      </nav>
 
       <style jsx global>{`
         * {
@@ -304,13 +468,25 @@ export default function Home() {
           background: #000;
         }
 
-        .camera-app {
+        button {
+          cursor: pointer;
+          font-family: inherit;
+        }
+
+        .app {
+          width: 100vw;
+          min-height: 100vh;
+          background: #000;
+          color: #fff;
+          overflow: hidden;
+        }
+
+        .camera-screen {
           width: 100vw;
           height: 100vh;
           position: relative;
           overflow: hidden;
           background: #000;
-          color: #fff;
         }
 
         .camera-video {
@@ -322,16 +498,16 @@ export default function Home() {
           background: #000;
         }
 
-        .camera-app::after {
+        .camera-screen::after {
           content: "";
           position: absolute;
           inset: 0;
           background: linear-gradient(
             to bottom,
-            rgba(0, 0, 0, 0.42) 0%,
+            rgba(0, 0, 0, 0.48) 0%,
             rgba(0, 0, 0, 0.08) 28%,
             rgba(0, 0, 0, 0.04) 52%,
-            rgba(0, 0, 0, 0.72) 100%
+            rgba(0, 0, 0, 0.76) 100%
           );
           pointer-events: none;
         }
@@ -449,70 +625,41 @@ export default function Home() {
           transform: translate(-50%, -50%);
           padding: 14px 20px;
           border-radius: 14px;
-          background: rgba(0, 0, 0, 0.72);
+          background: rgba(0, 0, 0, 0.74);
           backdrop-filter: blur(16px);
-          font-size: 18px;
+          font-size: 17px;
           font-weight: 800;
+          white-space: nowrap;
         }
 
-        .caption-card {
+        .ocr-preview-card {
           position: absolute;
           z-index: 6;
-          max-width: 320px;
-          padding: 16px 18px;
-          border-radius: 18px;
-          background: rgba(255, 255, 255, 0.9);
+          top: 16%;
+          left: 18px;
+          width: 310px;
+          max-height: 170px;
+          overflow-y: auto;
+          padding: 18px;
+          border-radius: 20px;
+          background: rgba(255, 255, 255, 0.92);
           color: #171729;
           backdrop-filter: blur(18px);
-          box-shadow: 0 18px 40px rgba(0, 0, 0, 0.2);
-        }
-
-        .caption-card.original {
-          top: 17%;
-          left: 18px;
-          max-width: 270px;
-        }
-
-        .caption-card.translated {
-          right: 18px;
-          top: 42%;
+          box-shadow: 0 18px 40px rgba(0, 0, 0, 0.22);
         }
 
         .card-label {
           margin-bottom: 8px;
           color: #6f5de8;
-          font-size: 12px;
-          font-weight: 900;
-        }
-
-        .caption-card h2 {
-          margin: 0 0 8px;
-          font-size: 24px;
-          letter-spacing: -0.05em;
-        }
-
-        .caption-card p {
-          margin: 0 0 8px;
-          color: #343243;
-          font-size: 14px;
-          line-height: 1.55;
-        }
-
-        .mini-actions {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 8px;
-          margin-top: 12px;
-        }
-
-        .mini-actions button {
-          border: none;
-          border-radius: 12px;
-          padding: 10px 8px;
-          background: #f1edff;
-          color: #6f51e8;
           font-size: 13px;
           font-weight: 900;
+        }
+
+        .ocr-preview-card p {
+          margin: 0;
+          color: #343243;
+          font-size: 15px;
+          line-height: 1.55;
         }
 
         .language-pill {
@@ -611,9 +758,200 @@ export default function Home() {
           color: #61dff3;
         }
 
-        .chat-sheet {
+        .camera-fallback {
           position: absolute;
-          z-index: 12;
+          z-index: 20;
+          inset: 0;
+          background: #111;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          align-items: center;
+          gap: 14px;
+          color: #fff;
+          padding: 20px;
+          text-align: center;
+        }
+
+        .camera-fallback button {
+          border: none;
+          border-radius: 999px;
+          padding: 12px 18px;
+          background: #fff;
+          color: #111;
+          font-weight: 900;
+        }
+
+        .explain-screen {
+          min-height: 100vh;
+          background:
+            radial-gradient(circle at 20% 0%, #f4e8ff 0, transparent 30%),
+            radial-gradient(circle at 90% 0%, #defaff 0, transparent 26%),
+            #fbfbff;
+          color: #171729;
+          padding: 22px 22px 110px;
+          overflow-y: auto;
+        }
+
+        .explain-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 26px;
+        }
+
+        .explain-header button {
+          width: 44px;
+          height: 44px;
+          border-radius: 999px;
+          border: 1px solid #edeaf4;
+          background: rgba(255, 255, 255, 0.9);
+          color: #171729;
+          font-size: 24px;
+          box-shadow: 0 8px 22px rgba(40, 35, 80, 0.08);
+        }
+
+        .explain-title-mini {
+          text-align: center;
+          font-weight: 900;
+          font-size: 18px;
+          letter-spacing: -0.04em;
+        }
+
+        .explain-sub-mini {
+          text-align: center;
+          margin-top: 3px;
+          font-size: 10px;
+          color: #8c89a0;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+        }
+
+        .artwork-hero {
+          padding: 24px;
+          border-radius: 32px;
+          background: linear-gradient(145deg, #ffffff, #f8f3ff);
+          border: 1px solid #eeeaf8;
+          box-shadow: 0 18px 45px rgba(60, 45, 100, 0.1);
+        }
+
+        .badge {
+          display: inline-flex;
+          padding: 8px 12px;
+          border-radius: 999px;
+          background: #f0eaff;
+          color: #7254e8;
+          font-size: 13px;
+          font-weight: 900;
+        }
+
+        .artwork-hero h1 {
+          margin: 16px 0 10px;
+          font-size: 38px;
+          line-height: 1.1;
+          letter-spacing: -0.07em;
+        }
+
+        .artist-line {
+          margin: 0;
+          color: #625f73;
+          font-size: 16px;
+          line-height: 1.55;
+        }
+
+        .summary {
+          margin: 18px 0 0;
+          font-size: 19px;
+          line-height: 1.55;
+          font-weight: 800;
+          letter-spacing: -0.04em;
+        }
+
+        .ocr-text-box,
+        .explain-card {
+          margin-top: 18px;
+          padding: 20px;
+          border-radius: 28px;
+          background: rgba(255, 255, 255, 0.94);
+          border: 1px solid #eeeaf4;
+          box-shadow: 0 14px 35px rgba(40, 35, 80, 0.07);
+        }
+
+        .section-title {
+          margin-bottom: 12px;
+          color: #7254e8;
+          font-size: 17px;
+          font-weight: 900;
+          letter-spacing: -0.04em;
+        }
+
+        .ocr-text-box p,
+        .explain-card p {
+          margin: 0;
+          color: #444153;
+          font-size: 16px;
+          line-height: 1.75;
+        }
+
+        .viewing-points {
+          display: grid;
+          gap: 12px;
+        }
+
+        .viewing-point {
+          display: flex;
+          gap: 12px;
+          align-items: flex-start;
+        }
+
+        .viewing-point span {
+          width: 26px;
+          height: 26px;
+          border-radius: 50%;
+          background: #efeaff;
+          color: #7254e8;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 13px;
+          font-weight: 900;
+          flex-shrink: 0;
+        }
+
+        .bottom-action-area {
+          position: fixed;
+          left: 20px;
+          right: 20px;
+          bottom: 24px;
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 12px;
+        }
+
+        .ghost-action,
+        .primary-action {
+          border: none;
+          border-radius: 22px;
+          padding: 17px 14px;
+          font-size: 16px;
+          font-weight: 900;
+          box-shadow: 0 14px 35px rgba(45, 35, 90, 0.18);
+        }
+
+        .ghost-action {
+          background: #fff;
+          color: #7254e8;
+          border: 1px solid #e8e0ff;
+        }
+
+        .primary-action {
+          background: linear-gradient(135deg, #7357ff, #bd43ff);
+          color: #fff;
+        }
+
+        .chat-sheet {
+          position: fixed;
+          z-index: 30;
           left: 0;
           right: 0;
           bottom: 0;
@@ -719,36 +1057,27 @@ export default function Home() {
           font-weight: 900;
         }
 
-        .camera-fallback {
-          position: absolute;
-          z-index: 20;
-          inset: 0;
-          background: #111;
-          display: flex;
-          flex-direction: column;
-          justify-content: center;
-          align-items: center;
-          gap: 14px;
-          color: #fff;
-        }
-
-        .camera-fallback button {
-          border: none;
-          border-radius: 999px;
-          padding: 12px 18px;
-          background: #fff;
-          color: #111;
-          font-weight: 900;
-        }
-
         @media (min-width: 700px) {
-          .camera-app {
+          .app,
+          .camera-screen,
+          .explain-screen {
             width: 430px;
             height: 860px;
+            min-height: 860px;
+            margin: 24px auto;
             border-radius: 42px;
             border: 8px solid #111;
-            margin: 24px auto;
+            overflow: hidden;
             box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
+          }
+
+          .chat-sheet {
+            left: 50%;
+            right: auto;
+            width: 430px;
+            transform: translateX(-50%);
+            bottom: 24px;
+            border-radius: 30px;
           }
 
           body {
