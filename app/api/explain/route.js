@@ -1,4 +1,4 @@
-import OpenAI from "openai";
+import Openrouter from "openrouter";
 
 function extractJson(text) {
   if (!text) return null;
@@ -32,19 +32,19 @@ export async function GET() {
 
 export async function POST(request) {
   try {
-    const apiKey = process.env.OPENAI_API_KEY;
+    const apiKey = process.env.OPENROUTER_API_KEY;
 
     if (!apiKey) {
       return Response.json(
         {
           error:
-            "OPENAI_API_KEY가 설정되지 않았습니다. .env.local 또는 Vercel Environment Variables를 확인하세요.",
+            "OPENROUTER_API_KEY가 설정되지 않았습니다. .env.local 또는 Vercel Environment Variables를 확인하세요.",
         },
         { status: 500 }
       );
     }
 
-    const client = new OpenAI({
+    const client = new Openrouter({
       apiKey,
     });
 
