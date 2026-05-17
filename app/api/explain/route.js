@@ -1,5 +1,3 @@
-import Openrouter from "openrouter";
-
 function extractJson(text) {
   if (!text) return null;
 
@@ -26,7 +24,7 @@ function extractJson(text) {
 export async function GET() {
   return Response.json({
     message:
-      "Clartity explain API is running. Use POST to generate artwork explanation.",
+      "Clartity explain API is running with OpenRouter. Use POST to generate artwork explanation.",
   });
 }
 
@@ -43,10 +41,6 @@ export async function POST(request) {
         { status: 500 }
       );
     }
-
-    const client = new Openrouter({
-      apiKey,
-    });
 
     const { ocrText, userProfile, question } = await request.json();
 
@@ -117,12 +111,44 @@ OCR 텍스트를 바탕으로 실제 작품을 추정하고, 그 작품에 맞�
 }
 `;
 
-    const response = await client.responses.create({
-      model: "gpt-4.1-mini",
-      input: prompt,
-    });
+    const openRouterResponse = await fetch(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://clartity-gs83.vercel.app",
+          "X-Title": "Clartity",
+        },
+        body: JSON.stringify({
+          model: "openrouter/free",
+          messages: [
+            {
+              role: "user",
+              content: prompt,
+            },
+          ],
+          temperature: 0.3,
+        }),
+      }
+    );
 
-    const raw = response.output_text;
+    const result = await openRouterResponse.json();
+
+    if (!openRouterResponse.ok) {
+      return Response.json(
+        {
+          error:
+            result?.error?.message ||
+            result?.message ||
+            "OpenRouter API 요청에 실패했습니다.",
+        },
+        { status: openRouterResponse.status }
+      );
+    }
+
+    const raw = result?.choices?.[0]?.message?.content || "";
     const parsed = extractJson(raw);
 
     if (!parsed) {
@@ -132,7 +158,8 @@ OCR 텍스트를 바탕으로 실제 작품을 추정하고, 그 작품에 맞�
         year: "확인 필요",
         museum: "확인 필요",
         summary: "OCR 결과를 바탕으로 작품 정보를 분석했습니다.",
-        simpleExplanation: raw || "AI 해설을 생성했지만 JSON 변환에 실패했습니다.",
+        simpleExplanation:
+          raw || "AI 해설을 생성했지만 JSON 변환에 실패했습니다.",
         artistDescription: "추가 확인이 필요합니다.",
         artistIntention: "추가 확인이 필요합니다.",
         background: "추가 확인이 필요합니다.",
@@ -151,7 +178,8 @@ OCR 텍스트를 바탕으로 실제 작품을 추정하고, 그 작품에 맞�
       artist: parsed.artist || "확인 필요",
       year: parsed.year || "확인 필요",
       museum: parsed.museum || "확인 필요",
-      summary: parsed.summary || "OCR 결과를 바탕으로 작품 정보를 분석했습니다.",
+      summary:
+        parsed.summary || "OCR 결과를 바탕으로 작품 정보를 분석했습니다.",
       simpleExplanation:
         parsed.simpleExplanation ||
         parsed.explanation ||
