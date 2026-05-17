@@ -18,7 +18,6 @@ export default function Home() {
   const [ocrText, setOcrText] = useState("");
   const [artwork, setArtwork] = useState(null);
 
-  const [scanHint, setScanHint] = useState("");
   const [questionOpen, setQuestionOpen] = useState(false);
   const [question, setQuestion] = useState("");
   const [chat, setChat] = useState([]);
@@ -36,6 +35,60 @@ export default function Home() {
       stopCamera();
     };
   }, []);
+
+  const cleanValue = (value) => {
+    if (!value) return "";
+
+    let text = String(value).trim();
+
+    text = text
+      .replace(/\(확인 필요\)/g, "")
+      .replace(/\[확인 필요\]/g, "")
+      .replace(/확인 필요/g, "")
+      .replace(/정보 없음/g, "")
+      .replace(/소장처 정보 미상/g, "")
+      .replace(/미상/g, "")
+      .replace(/unknown/gi, "")
+      .replace(/n\/a/gi, "")
+      .replace(/null/gi, "")
+      .replace(/undefined/gi, "")
+      .trim();
+
+    text = text.replace(/\s{2,}/g, " ").trim();
+
+    if (
+      text === "" ||
+      text === "소장처 정보" ||
+      text === "소장처" ||
+      text === "제작연도" ||
+      text === "작품명" ||
+      text === "작가"
+    ) {
+      return "";
+    }
+
+    return text;
+  };
+
+  const displayMeta = (item) => {
+    if (!item) return "";
+
+    const museum = cleanValue(item.museum);
+    const year = cleanValue(item.year);
+
+    return [museum, year].filter(Boolean).join(" · ");
+  };
+
+  const hasDetectedInfo = (item) => {
+    if (!item) return false;
+
+    return Boolean(
+      cleanValue(item.title) ||
+        cleanValue(item.artist) ||
+        cleanValue(item.year) ||
+        cleanValue(item.museum)
+    );
+  };
 
   const startCamera = async () => {
     try {
@@ -87,8 +140,7 @@ export default function Home() {
 
       let gray = 0.299 * r + 0.587 * g + 0.114 * b;
 
-      gray = (gray - 128) * 1.45 + 128;
-      gray = gray > 150 ? 255 : 0;
+      gray = (gray - 128) * 1.35 + 128;
 
       data[i] = gray;
       data[i + 1] = gray;
@@ -98,7 +150,7 @@ export default function Home() {
     ctx.putImageData(imageData, 0, 0);
   };
 
-  const createEnhancedOcrCanvas = () => {
+  const createOcrCanvas = () => {
     const video = videoRef.current;
     const baseCanvas = canvasRef.current;
 
@@ -110,47 +162,39 @@ export default function Home() {
     if (!videoWidth || !videoHeight) return null;
 
     const baseCtx = baseCanvas.getContext("2d");
+
     baseCanvas.width = videoWidth;
     baseCanvas.height = videoHeight;
     baseCtx.drawImage(video, 0, 0, videoWidth, videoHeight);
 
     const regions = [
       {
-        name: "full",
-        x: 0,
-        y: 0,
-        w: videoWidth,
-        h: videoHeight,
-        scaleW: 1200,
+        x: videoWidth * 0.02,
+        y: videoHeight * 0.08,
+        w: videoWidth * 0.96,
+        h: videoHeight * 0.72,
+        scaleW: 1000,
       },
       {
-        name: "middle",
-        x: videoWidth * 0.05,
-        y: videoHeight * 0.18,
-        w: videoWidth * 0.9,
-        h: videoHeight * 0.46,
-        scaleW: 1200,
-      },
-      {
-        name: "lower",
-        x: videoWidth * 0.05,
-        y: videoHeight * 0.42,
-        w: videoWidth * 0.9,
-        h: videoHeight * 0.42,
-        scaleW: 1200,
+        x: videoWidth * 0.02,
+        y: videoHeight * 0.25,
+        w: videoWidth * 0.96,
+        h: videoHeight * 0.5,
+        scaleW: 1000,
       },
     ];
 
-    const processedParts = regions.map((region) => {
+    const parts = regions.map((region) => {
       const partCanvas = document.createElement("canvas");
-      const partScale = region.scaleW / region.w;
+      const scale = region.scaleW / region.w;
       const partWidth = region.scaleW;
-      const partHeight = Math.max(1, Math.round(region.h * partScale));
+      const partHeight = Math.max(1, Math.round(region.h * scale));
 
       partCanvas.width = partWidth;
       partCanvas.height = partHeight;
 
       const partCtx = partCanvas.getContext("2d");
+
       partCtx.drawImage(
         baseCanvas,
         region.x,
@@ -172,11 +216,11 @@ export default function Home() {
       };
     });
 
-    const gap = 36;
-    const combinedWidth = 1200;
+    const gap = 24;
+    const combinedWidth = 1000;
     const combinedHeight =
-      processedParts.reduce((sum, part) => sum + part.height, 0) +
-      gap * (processedParts.length - 1);
+      parts.reduce((sum, part) => sum + part.height, 0) +
+      gap * (parts.length - 1);
 
     const combinedCanvas = document.createElement("canvas");
     combinedCanvas.width = combinedWidth;
@@ -188,11 +232,11 @@ export default function Home() {
 
     let currentY = 0;
 
-    processedParts.forEach((part, index) => {
+    parts.forEach((part, index) => {
       combinedCtx.drawImage(part.canvas, 0, currentY, part.width, part.height);
       currentY += part.height;
 
-      if (index < processedParts.length - 1) {
+      if (index < parts.length - 1) {
         combinedCtx.fillStyle = "#ffffff";
         combinedCtx.fillRect(0, currentY, combinedWidth, gap);
         currentY += gap;
@@ -207,31 +251,10 @@ export default function Home() {
 
     return text
       .replace(/[|{}[\]<>]/g, " ")
+      .replace(/[^\S\r\n]+/g, " ")
       .replace(/\s+/g, " ")
       .replace(/([A-Za-z])\s+([.,;:])/g, "$1$2")
       .trim();
-  };
-
-  const isOcrUsable = (text, confidence) => {
-    const cleanText = normalizeOcrText(text);
-
-    const hasEnoughLength = cleanText.length >= 12;
-    const hasAlphabetOrKorean = /[A-Za-z가-힣]/.test(cleanText);
-    const hasLikelyCaptionSignal =
-      /artist|title|oil|canvas|museum|louvre|gallery|collection|born|painted|작가|작품|미술관|소장|제작|연도/i.test(
-        cleanText
-      ) || cleanText.split(" ").length >= 4;
-
-    const confidenceOkay = Number.isFinite(confidence)
-      ? confidence >= 25
-      : true;
-
-    return (
-      hasEnoughLength &&
-      hasAlphabetOrKorean &&
-      hasLikelyCaptionSignal &&
-      confidenceOkay
-    );
   };
 
   const captureAndOCR = async () => {
@@ -242,29 +265,25 @@ export default function Home() {
     setOcrText("");
     setArtwork(null);
     setChat([]);
-    setScanHint("");
 
     try {
-      const ocrCanvas = createEnhancedOcrCanvas();
+      const ocrCanvas = createOcrCanvas();
 
       if (!ocrCanvas) {
         alert("카메라 화면을 캡처하지 못했습니다. 다시 시도해주세요.");
         return;
       }
 
-      const result = await Tesseract.recognize(ocrCanvas, "eng+kor+fra+jpn", {
+      const result = await Tesseract.recognize(ocrCanvas, "eng+kor+fra", {
         logger: (m) => console.log(m),
         tessedit_pageseg_mode: "6",
       });
 
       const rawText = result.data.text || "";
-      const confidence = result.data.confidence;
       const text = normalizeOcrText(rawText);
 
-      if (!isOcrUsable(text, confidence)) {
-        setScanHint(
-          "캡션 인식이 명확하지 않습니다. 작품명과 작가명이 선명하게 보이도록 더 가까이, 정면에서 다시 촬영해주세요."
-        );
+      if (!text || text.length < 3) {
+        alert("캡션 글자가 거의 인식되지 않았습니다. 조금 더 가까이 촬영해주세요.");
         return;
       }
 
@@ -302,7 +321,7 @@ export default function Home() {
       setChat([
         {
           role: "ai",
-          text: `OCR 결과를 바탕으로 「${data.title}」 작품 정보를 분석했어요. 분석 신뢰도는 ${data.confidence}입니다.`,
+          text: "작품 정보를 분석했습니다. 궁금한 점을 이어서 질문해보세요.",
         },
       ]);
 
@@ -311,13 +330,9 @@ export default function Home() {
       console.error(error);
 
       if (error.name === "AbortError") {
-        setScanHint(
-          "AI 해설 생성 시간이 너무 오래 걸립니다. 잠시 후 다시 시도해주세요."
-        );
+        alert("AI 해설 생성 시간이 너무 오래 걸립니다. 다시 시도해주세요.");
       } else {
-        setScanHint(
-          error.message || "OCR 또는 AI 해설 생성 중 오류가 발생했습니다."
-        );
+        alert(error.message || "OCR 또는 AI 해설 생성 중 오류가 발생했습니다.");
       }
     } finally {
       setOcrLoading(false);
@@ -373,7 +388,7 @@ export default function Home() {
             data.simpleExplanation ||
             data.explanation ||
             data.summary ||
-            "이 작품에 대한 추가 설명을 생성했습니다.",
+            "이 작품에 대한 설명을 생성했습니다.",
         },
       ]);
     } catch (error) {
@@ -426,9 +441,6 @@ export default function Home() {
             <div className="corner top-right" />
             <div className="corner bottom-left" />
             <div className="corner bottom-right" />
-            <div className="guide-text">
-              작품명과 작가명이 선명하게 보이도록 맞춰주세요
-            </div>
           </div>
 
           {ocrLoading && (
@@ -437,18 +449,6 @@ export default function Home() {
 
           {aiLoading && (
             <div className="loading-toast">작품 해설을 생성 중입니다...</div>
-          )}
-
-          {scanHint && (
-            <div className="scan-hint-card">
-              <div className="scan-hint-title">다시 촬영해주세요</div>
-              <p>{scanHint}</p>
-              <div className="scan-hint-list">
-                <span>• 캡션을 더 가까이 비추기</span>
-                <span>• 휴대폰을 흔들지 않기</span>
-                <span>• 작품명과 작가명이 화면에 들어오게 하기</span>
-              </div>
-            </div>
           )}
 
           <div className="language-pill">
@@ -527,85 +527,100 @@ export default function Home() {
           </header>
 
           <section className="artwork-hero">
-            <div className="badge">✨ 분석 신뢰도 {artwork.confidence}</div>
+            <div className="badge">✨ AI Caption Guide</div>
 
-            <h1>{artwork.title}</h1>
+            <h1>{cleanValue(artwork.title) || "작품 해설"}</h1>
 
-            <p className="artist-line">
-              <b>{artwork.artist}</b>
-              <br />
-              {artwork.museum} · {artwork.year}
-            </p>
+            {(cleanValue(artwork.artist) || displayMeta(artwork)) && (
+              <p className="artist-line">
+                {cleanValue(artwork.artist) && (
+                  <>
+                    <b>{cleanValue(artwork.artist)}</b>
+                    <br />
+                  </>
+                )}
+                {displayMeta(artwork)}
+              </p>
+            )}
 
-            <p className="summary">{artwork.summary}</p>
+            {cleanValue(artwork.summary) && (
+              <p className="summary">{cleanValue(artwork.summary)}</p>
+            )}
           </section>
 
-          <section className="detected-info-box">
-            <div className="section-title">인식된 작품 정보</div>
+          {hasDetectedInfo(artwork) && (
+            <section className="detected-info-box">
+              <div className="section-title">인식된 작품 정보</div>
 
-            <div className="info-row">
-              <span>작품명</span>
-              <strong>{artwork.title || "확인 필요"}</strong>
-            </div>
+              {cleanValue(artwork.title) && (
+                <div className="info-row">
+                  <span>작품명</span>
+                  <strong>{cleanValue(artwork.title)}</strong>
+                </div>
+              )}
 
-            <div className="info-row">
-              <span>작가</span>
-              <strong>{artwork.artist || "확인 필요"}</strong>
-            </div>
+              {cleanValue(artwork.artist) && (
+                <div className="info-row">
+                  <span>작가</span>
+                  <strong>{cleanValue(artwork.artist)}</strong>
+                </div>
+              )}
 
-            <div className="info-row">
-              <span>제작연도</span>
-              <strong>{artwork.year || "확인 필요"}</strong>
-            </div>
+              {cleanValue(artwork.year) && (
+                <div className="info-row">
+                  <span>제작연도</span>
+                  <strong>{cleanValue(artwork.year)}</strong>
+                </div>
+              )}
 
-            <div className="info-row">
-              <span>소장처</span>
-              <strong>{artwork.museum || "확인 필요"}</strong>
-            </div>
-          </section>
+              {cleanValue(artwork.museum) && (
+                <div className="info-row">
+                  <span>소장처</span>
+                  <strong>{cleanValue(artwork.museum)}</strong>
+                </div>
+              )}
+            </section>
+          )}
 
           <section className="explain-card">
-            <div className="section-title">간단한 작품 해설</div>
+            <div className="section-title">작품 해설</div>
             <p>
-              {artwork.simpleExplanation ||
-                artwork.explanation ||
-                "작품 해설을 생성하지 못했습니다."}
+              {cleanValue(artwork.simpleExplanation) ||
+                cleanValue(artwork.explanation) ||
+                "작품의 형태, 주제, 표현 방식을 중심으로 감상해보세요."}
             </p>
           </section>
 
-          <section className="explain-card">
-            <div className="section-title">작가 설명</div>
-            <p>
-              {artwork.artistDescription ||
-                "작가 정보는 추가 확인이 필요합니다."}
-            </p>
-          </section>
+          {cleanValue(artwork.artistDescription) && (
+            <section className="explain-card">
+              <div className="section-title">작가 설명</div>
+              <p>{cleanValue(artwork.artistDescription)}</p>
+            </section>
+          )}
 
-          <section className="explain-card">
-            <div className="section-title">작가의 의도</div>
-            <p>
-              {artwork.artistIntention ||
-                "작가의 의도는 추가 확인이 필요합니다."}
-            </p>
-          </section>
+          {cleanValue(artwork.artistIntention) && (
+            <section className="explain-card">
+              <div className="section-title">작가의 의도</div>
+              <p>{cleanValue(artwork.artistIntention)}</p>
+            </section>
+          )}
 
-          <section className="explain-card">
-            <div className="section-title">배경 설명</div>
-            <p>
-              {artwork.background ||
-                "작품의 시대적·전시적 배경은 추가 확인이 필요합니다."}
-            </p>
-          </section>
+          {cleanValue(artwork.background) && (
+            <section className="explain-card">
+              <div className="section-title">배경 설명</div>
+              <p>{cleanValue(artwork.background)}</p>
+            </section>
+          )}
 
-          {artwork.viewingPoints?.length > 0 && (
+          {artwork.viewingPoints?.filter(cleanValue).length > 0 && (
             <section className="explain-card">
               <div className="section-title">감상 포인트</div>
 
               <div className="viewing-points">
-                {artwork.viewingPoints.map((point, index) => (
+                {artwork.viewingPoints.filter(cleanValue).map((point, index) => (
                   <div key={index} className="viewing-point">
                     <span>{index + 1}</span>
-                    <p>{point}</p>
+                    <p>{cleanValue(point)}</p>
                   </div>
                 ))}
               </div>
@@ -631,7 +646,7 @@ export default function Home() {
           <div className="sheet-header">
             <div>
               <h3>작품에 대해 질문하기</h3>
-              <p>인식된 캡션을 바탕으로 답변합니다.</p>
+              <p>인식된 작품 정보를 바탕으로 답변합니다.</p>
             </div>
             <button onClick={() => setQuestionOpen(false)}>×</button>
           </div>
@@ -639,7 +654,7 @@ export default function Home() {
           <div className="chat-list">
             {chat.length === 0 && (
               <div className="bubble ai">
-                먼저 작품 캡션을 촬영하면 해당 작품에 대해 질문할 수 있어요.
+                작품을 인식한 뒤 궁금한 점을 질문할 수 있어요.
               </div>
             )}
 
@@ -776,7 +791,7 @@ export default function Home() {
           position: absolute;
           width: 42px;
           height: 42px;
-          border-color: rgba(105, 229, 239, 0.95);
+          border-color: rgba(255, 255, 255, 0.95);
         }
 
         .top-left {
@@ -811,20 +826,6 @@ export default function Home() {
           border-radius: 0 0 14px 0;
         }
 
-        .guide-text {
-          position: absolute;
-          left: 50%;
-          bottom: -42px;
-          transform: translateX(-50%);
-          white-space: nowrap;
-          padding: 9px 14px;
-          border-radius: 999px;
-          background: rgba(0, 0, 0, 0.58);
-          backdrop-filter: blur(14px);
-          font-size: 13px;
-          font-weight: 700;
-        }
-
         .loading-toast {
           position: absolute;
           z-index: 9;
@@ -838,43 +839,6 @@ export default function Home() {
           font-size: 17px;
           font-weight: 800;
           white-space: nowrap;
-        }
-
-        .scan-hint-card {
-          position: absolute;
-          z-index: 8;
-          left: 20px;
-          right: 20px;
-          top: 108px;
-          padding: 18px;
-          border-radius: 22px;
-          background: rgba(255, 255, 255, 0.94);
-          color: #171729;
-          backdrop-filter: blur(18px);
-          box-shadow: 0 18px 45px rgba(0, 0, 0, 0.25);
-        }
-
-        .scan-hint-title {
-          color: #7254e8;
-          font-size: 16px;
-          font-weight: 900;
-          margin-bottom: 8px;
-        }
-
-        .scan-hint-card p {
-          margin: 0;
-          color: #3f3b4f;
-          font-size: 14px;
-          line-height: 1.55;
-        }
-
-        .scan-hint-list {
-          display: grid;
-          gap: 5px;
-          margin-top: 12px;
-          color: #69657a;
-          font-size: 13px;
-          font-weight: 700;
         }
 
         .language-pill {
@@ -1132,7 +1096,7 @@ export default function Home() {
           margin: 0;
           color: #444153;
           font-size: 16px;
-          line-height: 1.75;
+          line-height: 1.85;
         }
 
         .viewing-points {
