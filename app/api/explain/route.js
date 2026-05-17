@@ -21,6 +21,46 @@ function extractJson(text) {
   }
 }
 
+function cleanField(value) {
+  if (!value) return "";
+
+  let text = String(value).trim();
+
+  text = text
+    .replace(/\(확인 필요\)/g, "")
+    .replace(/\[확인 필요\]/g, "")
+    .replace(/확인 필요/g, "")
+    .replace(/정보 없음/g, "")
+    .replace(/소장처 정보 미상/g, "")
+    .replace(/미상/g, "")
+    .replace(/unknown/gi, "")
+    .replace(/n\/a/gi, "")
+    .replace(/null/gi, "")
+    .replace(/undefined/gi, "")
+    .trim();
+
+  text = text.replace(/\s{2,}/g, " ").trim();
+
+  if (
+    text === "" ||
+    text === "소장처 정보" ||
+    text === "소장처" ||
+    text === "제작연도" ||
+    text === "작품명" ||
+    text === "작가"
+  ) {
+    return "";
+  }
+
+  return text;
+}
+
+function cleanList(list) {
+  if (!Array.isArray(list)) return [];
+
+  return list.map(cleanField).filter(Boolean);
+}
+
 export async function GET() {
   return Response.json({
     message:
@@ -35,8 +75,7 @@ export async function POST(request) {
     if (!apiKey) {
       return Response.json(
         {
-          error:
-            "OPENROUTER_API_KEY가 설정되지 않았습니다. 환경변수를 확인하세요.",
+          error: "OPENROUTER_API_KEY가 설정되지 않았습니다.",
         },
         { status: 500 }
       );
@@ -56,59 +95,54 @@ export async function POST(request) {
     const isQuestionMode = Boolean(question && question.trim());
 
     const prompt = `
-너는 박물관·미술관 현장에서 관람객에게 설명하는 전문 도슨트다.
+너는 미술관 현장에서 관람객에게 설명하는 전문 도슨트다.
 
-아래 텍스트는 사용자가 카메라 OCR로 인식한 작품 캡션이다.
-OCR 텍스트에는 오타, 줄바꿈 오류, 외국어 혼합, 일부 누락이 있을 수 있다.
+아래 텍스트는 OCR로 인식한 작품 캡션이다.
+OCR에는 오타, 누락, 줄바꿈 오류가 있을 수 있다.
 
-[OCR 캡션 텍스트]
+[OCR 텍스트]
 """
 ${ocrText}
 """
 
-[사용자 프로필]
+[사용자]
 - 지식 수준: ${userProfile?.level || "미술 입문자"}
 - 선호 취향: ${userProfile?.taste || "쉽고 감성적인 설명"}
 - 연령대: ${userProfile?.age || "20-30대"}
 
-[사용자 질문]
-${question || "없음. 작품 기본 해설을 생성해라."}
+[질문]
+${question || "없음"}
 
-역할:
-OCR 텍스트를 바탕으로 실제 작품을 추정하고, 관람객에게 제공할 작품 해설을 생성한다.
+해야 할 일:
+1. OCR에서 작품명, 작가명, 제작연도, 소장처를 정제해라.
+2. OCR이 조금 틀려도 유명 작품/작가라면 미술사 지식으로 자연스럽게 보정해라.
+3. "확인 필요", "미상", "정보 없음", "unknown" 같은 표현은 절대 쓰지 마라.
+4. 모르는 필드는 빈 문자열 ""로 둬라.
+5. 작품명과 작가명은 OCR에서 추정 가능하면 반드시 최대한 살려라.
+6. 작품 해설은 입문자가 이해할 수 있게 구체적으로 작성해라.
+7. 반드시 JSON만 출력해라.
 
-중요 규칙:
-1. 특정 작품을 임의로 고정하지 마라.
-2. OCR 텍스트에 근거해서 작품명, 작가명, 제작연도, 소장처를 정제해라.
-3. 불확실한 정보는 "확인 필요"라고 쓰지 말고 빈 문자열 ""로 둬라.
-4. "확인 필요", "미상", "정보 없음", "unknown" 같은 표현은 절대 출력하지 마라.
-5. OCR 텍스트에 유명 작품명/작가명이 일부라도 보이면 미술사 지식을 활용해 자연스럽게 보정해라.
-6. 사용자에게 OCR 원문은 보여주지 않을 것이므로, 정제된 작품 정보와 해설만 출력해라.
-7. 설명은 너무 짧게 쓰지 말고, 실제 전시장 도슨트처럼 충분히 상세하게 작성해라.
-8. 미술 기초지식이 없는 20-30대가 이해할 수 있게 쉽게 풀어써라.
-9. 사용자가 질문했다면 answer 필드에 질문에 대한 직접 답변을 써라.
-10. 반드시 JSON만 출력해라. 마크다운, 코드블록, 설명문은 출력하지 마라.
+해설 길이:
+- summary: 한 문장
+- simpleExplanation: 5~7문장
+- artistDescription: 3~5문장
+- artistIntention: 3~5문장
+- background: 3~5문장
+- viewingPoints: 4개
 
-해설 작성 기준:
-- simpleExplanation: 최소 5문장. 작품이 무엇을 보여주는지, 화면 구성, 인물/소재, 첫인상을 설명.
-- artistDescription: 최소 4문장. 작가의 특징, 활동 시기, 미술사적 위치를 설명.
-- artistIntention: 최소 4문장. 작가가 이 작품을 통해 무엇을 강조했는지 설명.
-- background: 최소 4문장. 제작 시기, 당시 미술사 흐름, 사회·문화적 배경을 설명.
-- viewingPoints: 구체적 감상 포인트 4개.
-
-출력 JSON 형식:
+출력 JSON:
 {
-  "title": "작품명. 불확실하면 빈 문자열",
-  "artist": "작가명. 불확실하면 빈 문자열",
-  "year": "제작연도. 불확실하면 빈 문자열",
-  "museum": "미술관/소장처. 불확실하면 빈 문자열",
-  "summary": "작품을 한 문장으로 쉽게 요약",
+  "title": "작품명 또는 빈 문자열",
+  "artist": "작가명 또는 빈 문자열",
+  "year": "제작연도 또는 빈 문자열",
+  "museum": "소장처 또는 빈 문자열",
+  "summary": "작품 한 문장 요약",
   "simpleExplanation": "상세한 작품 해설",
-  "artistDescription": "상세한 작가 설명",
-  "artistIntention": "상세한 작가의 의도 설명",
-  "background": "상세한 작품 배경 설명",
+  "artistDescription": "작가 설명",
+  "artistIntention": "작가의 의도",
+  "background": "작품 배경 설명",
   "viewingPoints": ["감상 포인트 1", "감상 포인트 2", "감상 포인트 3", "감상 포인트 4"],
-  "answer": "${isQuestionMode ? "사용자 질문에 대한 직접 답변" : ""}",
+  "answer": "${isQuestionMode ? "질문에 대한 직접 답변" : ""}",
   "confidence": "높음/보통/낮음"
 }
 `;
@@ -124,14 +158,15 @@ OCR 텍스트를 바탕으로 실제 작품을 추정하고, 관람객에게 제
           "X-Title": "Clartity",
         },
         body: JSON.stringify({
-          model: "openrouter/free",
+          model: "z-ai/glm-4.5-air:free",
           messages: [
             {
               role: "user",
               content: prompt,
             },
           ],
-          temperature: 0.25,
+          temperature: 0.2,
+          max_tokens: 1500,
         }),
       }
     );
@@ -159,10 +194,11 @@ OCR 텍스트를 바탕으로 실제 작품을 추정하고, 관람객에게 제
         artist: "",
         year: "",
         museum: "",
-        summary: "작품의 시각적 특징과 전시 맥락을 바탕으로 감상해볼 수 있습니다.",
+        summary:
+          "작품의 시각적 특징과 전시 맥락을 중심으로 감상할 수 있습니다.",
         simpleExplanation:
           raw ||
-          "이 작품은 화면 구성과 표현 방식을 중심으로 감상할 수 있습니다.",
+          "이 작품은 화면 구성, 색감, 인물 또는 소재의 배치를 중심으로 감상할 수 있습니다. 작품의 첫인상뿐 아니라 세부 표현을 함께 살펴보면 작가가 강조하려는 분위기와 주제가 더 잘 드러납니다.",
         artistDescription: "",
         artistIntention: "",
         background: "",
@@ -170,7 +206,7 @@ OCR 텍스트를 바탕으로 실제 작품을 추정하고, 관람객에게 제
           "작품의 중심 인물이나 주요 대상을 먼저 살펴보세요.",
           "색감과 명암이 어떤 분위기를 만드는지 관찰해보세요.",
           "화면의 구도와 시선의 방향을 따라가보세요.",
-          "작품이 전시된 공간의 설명과 함께 연결해보세요.",
+          "작품이 놓인 시대적 배경과 연결해보세요.",
         ],
         answer: isQuestionMode ? raw : "",
         confidence: "낮음",
@@ -178,30 +214,31 @@ OCR 텍스트를 바탕으로 실제 작품을 추정하고, 관람객에게 제
     }
 
     return Response.json({
-      title: parsed.title || "",
-      artist: parsed.artist || "",
-      year: parsed.year || "",
-      museum: parsed.museum || "",
+      title: cleanField(parsed.title),
+      artist: cleanField(parsed.artist),
+      year: cleanField(parsed.year),
+      museum: cleanField(parsed.museum),
       summary:
-        parsed.summary ||
-        "작품의 시각적 특징과 전시 맥락을 바탕으로 감상해볼 수 있습니다.",
+        cleanField(parsed.summary) ||
+        "작품의 시각적 특징과 전시 맥락을 중심으로 감상할 수 있습니다.",
       simpleExplanation:
-        parsed.simpleExplanation ||
-        parsed.explanation ||
-        "이 작품은 화면 구성과 표현 방식을 중심으로 감상할 수 있습니다.",
-      artistDescription: parsed.artistDescription || "",
-      artistIntention: parsed.artistIntention || "",
-      background: parsed.background || "",
-      viewingPoints: Array.isArray(parsed.viewingPoints)
-        ? parsed.viewingPoints
-        : [
-            "작품의 중심 인물이나 주요 대상을 먼저 살펴보세요.",
-            "색감과 명암이 어떤 분위기를 만드는지 관찰해보세요.",
-            "화면의 구도와 시선의 방향을 따라가보세요.",
-            "작품이 전시된 공간의 설명과 함께 연결해보세요.",
-          ],
-      answer: parsed.answer || "",
-      confidence: parsed.confidence || "보통",
+        cleanField(parsed.simpleExplanation) ||
+        cleanField(parsed.explanation) ||
+        "이 작품은 화면 구성, 색감, 인물 또는 소재의 배치를 중심으로 감상할 수 있습니다.",
+      artistDescription: cleanField(parsed.artistDescription),
+      artistIntention: cleanField(parsed.artistIntention),
+      background: cleanField(parsed.background),
+      viewingPoints:
+        cleanList(parsed.viewingPoints).length > 0
+          ? cleanList(parsed.viewingPoints)
+          : [
+              "작품의 중심 인물이나 주요 대상을 먼저 살펴보세요.",
+              "색감과 명암이 어떤 분위기를 만드는지 관찰해보세요.",
+              "화면의 구도와 시선의 방향을 따라가보세요.",
+              "작품이 놓인 시대적 배경과 연결해보세요.",
+            ],
+      answer: cleanField(parsed.answer),
+      confidence: cleanField(parsed.confidence) || "보통",
     });
   } catch (error) {
     console.error(error);
@@ -213,4 +250,4 @@ OCR 텍스트를 바탕으로 실제 작품을 추정하고, 관람객에게 제
       { status: 500 }
     );
   }
-}   
+}
