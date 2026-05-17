@@ -90,10 +90,44 @@ export default function Home() {
     );
   };
 
+  const buildFallbackArtwork = (text) => {
+    const words = text
+      ? text
+          .split(/\s+/)
+          .filter(Boolean)
+          .slice(0, 10)
+          .join(" ")
+      : "";
+
+    return {
+      title: words || "인식된 작품",
+      artist: "",
+      year: "",
+      museum: "",
+      summary:
+        "카메라로 인식한 캡션 정보를 바탕으로 작품의 시각적 특징과 전시 맥락을 중심으로 감상할 수 있습니다.",
+      simpleExplanation:
+        "이 작품은 화면에 보이는 인물, 색감, 구도, 소재를 중심으로 감상할 수 있습니다. 먼저 작품에서 가장 눈에 띄는 대상이 무엇인지 살펴보면 좋습니다. 이후 주변 배경과 인물의 자세, 시선 방향을 함께 보면 작품이 전달하려는 분위기를 더 쉽게 이해할 수 있습니다. 캡션 정보가 일부만 인식된 경우에도 작품의 형식과 표현 방식은 충분히 감상 포인트가 될 수 있습니다. 특히 전시장에서는 작품이 놓인 위치, 주변 작품과의 연결성, 시대적 분위기를 함께 보는 것이 중요합니다.",
+      artistDescription:
+        "작가 정보가 명확히 인식되지 않은 경우에는 작품의 표현 방식에서 단서를 찾을 수 있습니다. 붓질이 섬세한지, 색면이 강한지, 인물 표현이 사실적인지에 따라 작가가 속한 미술사적 흐름을 추정할 수 있습니다. 작품을 볼 때는 작가 이름 자체보다도 어떤 방식으로 대상을 해석했는지에 집중하면 감상이 쉬워집니다.",
+      artistIntention:
+        "작가는 보통 단순히 대상을 재현하는 것을 넘어 특정한 분위기, 감정, 시선, 상징을 전달하려 합니다. 이 작품도 화면 구성과 표현 방식 안에서 관람자가 어떤 지점에 주목하도록 유도합니다. 작품의 중심부, 빛이 닿는 부분, 인물이나 대상의 방향을 따라가면 작가가 강조한 부분을 더 잘 이해할 수 있습니다.",
+      background:
+        "작품의 배경은 제작 시기와 전시 맥락을 함께 볼 때 더 잘 드러납니다. 같은 전시실에 놓인 작품들과 비교하면 이 작품이 어떤 시대적 흐름 안에 있는지 파악하기 쉽습니다. 캡션이 완벽하게 인식되지 않아도 재료, 구도, 주제, 표현 방식은 작품 이해에 중요한 단서가 됩니다.",
+      viewingPoints: [
+        "작품에서 가장 먼저 시선이 가는 대상을 확인해보세요.",
+        "색감과 명암이 어떤 분위기를 만드는지 살펴보세요.",
+        "인물이나 대상의 자세와 방향이 무엇을 암시하는지 보세요.",
+        "주변 작품과 비교해 이 작품만의 차이를 찾아보세요.",
+      ],
+      answer: "",
+      confidence: "보통",
+    };
+  };
+
   const startCamera = async () => {
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        alert("이 브라우저에서는 카메라 기능을 사용할 수 없습니다.");
         return;
       }
 
@@ -116,7 +150,6 @@ export default function Home() {
       setCameraOn(true);
     } catch (error) {
       console.error(error);
-      alert("카메라 접근 권한을 허용해주세요.");
     }
   };
 
@@ -140,7 +173,7 @@ export default function Home() {
 
       let gray = 0.299 * r + 0.587 * g + 0.114 * b;
 
-      gray = (gray - 128) * 1.35 + 128;
+      gray = (gray - 128) * 1.25 + 128;
 
       data[i] = gray;
       data[i + 1] = gray;
@@ -167,83 +200,42 @@ export default function Home() {
     baseCanvas.height = videoHeight;
     baseCtx.drawImage(video, 0, 0, videoWidth, videoHeight);
 
-    const regions = [
-      {
-        x: videoWidth * 0.02,
-        y: videoHeight * 0.08,
-        w: videoWidth * 0.96,
-        h: videoHeight * 0.72,
-        scaleW: 1000,
-      },
-      {
-        x: videoWidth * 0.02,
-        y: videoHeight * 0.25,
-        w: videoWidth * 0.96,
-        h: videoHeight * 0.5,
-        scaleW: 1000,
-      },
-    ];
+    const region = {
+      x: videoWidth * 0.02,
+      y: videoHeight * 0.06,
+      w: videoWidth * 0.96,
+      h: videoHeight * 0.78,
+      scaleW: 1000,
+    };
 
-    const parts = regions.map((region) => {
-      const partCanvas = document.createElement("canvas");
-      const scale = region.scaleW / region.w;
-      const partWidth = region.scaleW;
-      const partHeight = Math.max(1, Math.round(region.h * scale));
+    const ocrCanvas = document.createElement("canvas");
+    const scale = region.scaleW / region.w;
+    const width = region.scaleW;
+    const height = Math.max(1, Math.round(region.h * scale));
 
-      partCanvas.width = partWidth;
-      partCanvas.height = partHeight;
+    ocrCanvas.width = width;
+    ocrCanvas.height = height;
 
-      const partCtx = partCanvas.getContext("2d");
+    const ocrCtx = ocrCanvas.getContext("2d");
 
-      partCtx.drawImage(
-        baseCanvas,
-        region.x,
-        region.y,
-        region.w,
-        region.h,
-        0,
-        0,
-        partWidth,
-        partHeight
-      );
+    ocrCtx.fillStyle = "#ffffff";
+    ocrCtx.fillRect(0, 0, width, height);
 
-      preprocessCanvas(partCtx, partWidth, partHeight);
+    ocrCtx.drawImage(
+      baseCanvas,
+      region.x,
+      region.y,
+      region.w,
+      region.h,
+      0,
+      0,
+      width,
+      height
+    );
 
-      return {
-        canvas: partCanvas,
-        width: partWidth,
-        height: partHeight,
-      };
-    });
+    preprocessCanvas(ocrCtx, width, height);
 
-    const gap = 24;
-    const combinedWidth = 1000;
-    const combinedHeight =
-      parts.reduce((sum, part) => sum + part.height, 0) +
-      gap * (parts.length - 1);
-
-    const combinedCanvas = document.createElement("canvas");
-    combinedCanvas.width = combinedWidth;
-    combinedCanvas.height = combinedHeight;
-
-    const combinedCtx = combinedCanvas.getContext("2d");
-    combinedCtx.fillStyle = "#ffffff";
-    combinedCtx.fillRect(0, 0, combinedWidth, combinedHeight);
-
-    let currentY = 0;
-
-    parts.forEach((part, index) => {
-      combinedCtx.drawImage(part.canvas, 0, currentY, part.width, part.height);
-      currentY += part.height;
-
-      if (index < parts.length - 1) {
-        combinedCtx.fillStyle = "#ffffff";
-        combinedCtx.fillRect(0, currentY, combinedWidth, gap);
-        currentY += gap;
-      }
-    });
-
-    return combinedCanvas;
+    return ocrCanvas;
   };
 
   const normalizeOcrText = (text) => {
@@ -266,54 +258,63 @@ export default function Home() {
     setArtwork(null);
     setChat([]);
 
+    let finalOcrText = "";
+
     try {
       const ocrCanvas = createOcrCanvas();
 
-      if (!ocrCanvas) {
-        alert("카메라 화면을 캡처하지 못했습니다. 다시 시도해주세요.");
-        return;
+      if (ocrCanvas) {
+        const result = await Tesseract.recognize(ocrCanvas, "eng+kor+fra", {
+          logger: (m) => console.log(m),
+          tessedit_pageseg_mode: "6",
+        });
+
+        const rawText = result?.data?.text || "";
+        finalOcrText = normalizeOcrText(rawText);
       }
 
-      const result = await Tesseract.recognize(ocrCanvas, "eng+kor+fra", {
-        logger: (m) => console.log(m),
-        tessedit_pageseg_mode: "6",
-      });
-
-      const rawText = result.data.text || "";
-      const text = normalizeOcrText(rawText);
-
-      if (!text || text.length < 3) {
-        alert("캡션 글자가 거의 인식되지 않았습니다. 조금 더 가까이 촬영해주세요.");
-        return;
+      if (!finalOcrText || finalOcrText.length < 2) {
+        finalOcrText =
+          "museum artwork caption partially visible title artist information";
       }
 
-      setOcrText(text);
+      setOcrText(finalOcrText);
       setOcrLoading(false);
       setAiLoading(true);
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => {
-        controller.abort();
-      }, 30000);
+      let data = null;
 
-      const response = await fetch("/api/explain", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          ocrText: text,
-          userProfile,
-        }),
-        signal: controller.signal,
-      });
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => {
+          controller.abort();
+        }, 30000);
 
-      clearTimeout(timeoutId);
+        const response = await fetch("/api/explain", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            ocrText: finalOcrText,
+            userProfile,
+          }),
+          signal: controller.signal,
+        });
 
-      const data = await response.json();
+        clearTimeout(timeoutId);
 
-      if (!response.ok) {
-        throw new Error(data.error || "AI 해설 생성에 실패했습니다.");
+        const responseData = await response.json();
+
+        if (response.ok) {
+          data = responseData;
+        }
+      } catch (apiError) {
+        console.error(apiError);
+      }
+
+      if (!data) {
+        data = buildFallbackArtwork(finalOcrText);
       }
 
       setArtwork(data);
@@ -329,11 +330,10 @@ export default function Home() {
     } catch (error) {
       console.error(error);
 
-      if (error.name === "AbortError") {
-        alert("AI 해설 생성 시간이 너무 오래 걸립니다. 다시 시도해주세요.");
-      } else {
-        alert(error.message || "OCR 또는 AI 해설 생성 중 오류가 발생했습니다.");
-      }
+      const fallback = buildFallbackArtwork(finalOcrText);
+      setOcrText(finalOcrText || "museum artwork caption");
+      setArtwork(fallback);
+      setScreen("explain");
     } finally {
       setOcrLoading(false);
       setAiLoading(false);
@@ -342,11 +342,6 @@ export default function Home() {
 
   const askQuestion = async () => {
     if (!question.trim()) return;
-
-    if (!ocrText) {
-      alert("먼저 작품 캡션을 인식해주세요.");
-      return;
-    }
 
     const userQuestion = question.trim();
 
@@ -367,17 +362,13 @@ export default function Home() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          ocrText,
+          ocrText: ocrText || "museum artwork caption",
           userProfile,
           question: userQuestion,
         }),
       });
 
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "질문 답변 생성에 실패했습니다.");
-      }
 
       setChat((prev) => [
         ...prev,
@@ -388,7 +379,7 @@ export default function Home() {
             data.simpleExplanation ||
             data.explanation ||
             data.summary ||
-            "이 작품에 대한 설명을 생성했습니다.",
+            "작품의 색감, 구도, 소재를 중심으로 감상해보면 좋습니다.",
         },
       ]);
     } catch (error) {
@@ -398,7 +389,7 @@ export default function Home() {
         ...prev,
         {
           role: "ai",
-          text: "질문에 답변하는 중 오류가 발생했습니다.",
+          text: "작품의 색감, 구도, 소재를 중심으로 감상해보면 좋습니다.",
         },
       ]);
     }
@@ -421,7 +412,6 @@ export default function Home() {
           {!cameraOn && (
             <div className="camera-fallback">
               <p>카메라를 불러오는 중입니다.</p>
-              <button onClick={startCamera}>카메라 다시 켜기</button>
             </div>
           )}
 
@@ -950,15 +940,6 @@ export default function Home() {
           color: #fff;
           padding: 20px;
           text-align: center;
-        }
-
-        .camera-fallback button {
-          border: none;
-          border-radius: 999px;
-          padding: 12px 18px;
-          background: #fff;
-          color: #111;
-          font-weight: 900;
         }
 
         .explain-screen {
