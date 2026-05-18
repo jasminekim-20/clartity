@@ -495,7 +495,7 @@ export default function Home() {
 
             <div className="app-pill">
               <span className="app-dot" />
-              Clartatity
+              Clartity
             </div>
 
             <button className="icon-btn">?</button>
