@@ -76,6 +76,8 @@ export default function Home() {
   const captureAndOCR = async () => {
     if (!videoRef.current || !canvasRef.current) return;
 
+    setQuestionOpen(false);
+    setMode("camera");
     setOcrLoading(true);
     setAiLoading(false);
     setOcrText("");
