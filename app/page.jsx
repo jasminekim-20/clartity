@@ -10,7 +10,6 @@ export default function Home() {
 
   const [screen, setScreen] = useState("camera");
   const [mode, setMode] = useState("camera");
-
   const [cameraOn, setCameraOn] = useState(false);
   const [ocrLoading, setOcrLoading] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
@@ -79,21 +78,10 @@ export default function Home() {
     return [museum, year].filter(Boolean).join(" · ");
   };
 
-  const hasDetectedInfo = (item) => {
-    if (!item) return false;
-
-    return Boolean(
-      cleanValue(item.title) ||
-        cleanValue(item.artist) ||
-        cleanValue(item.year) ||
-        cleanValue(item.museum)
-    );
-  };
-
   const normalizeOcrText = (text) => {
     if (!text) return "";
 
-    return text
+    return String(text)
       .replace(/[|{}[\]<>]/g, " ")
       .replace(/[^\S\r\n]+/g, " ")
       .replace(/\s+/g, " ")
@@ -101,61 +89,107 @@ export default function Home() {
       .trim();
   };
 
-  const extractPossibleInfoFromOcr = (text) => {
-    const cleaned = normalizeOcrText(text);
-    const words = cleaned.split(/\s+/).filter(Boolean);
+  const extractBasicInfoFromOcr = (ocrText) => {
+    const raw = String(ocrText || "");
+    const flat = normalizeOcrText(raw);
 
-    const yearMatch = cleaned.match(/\b(1[3-9]\d{2}|20\d{2})\b/);
+    const lines = raw
+      .split(/\n|\\n/)
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+
+    const yearMatch = flat.match(
+      /\b(1[4-9]\d{2}|20\d{2})(?:\s*[–-]\s*\d{1,4})?\b/
+    );
+
     const year = yearMatch ? yearMatch[0] : "";
 
-    const properWords = words.filter((word) => {
-      return /^[A-Z][A-Za-zÀ-ÿ'-]{2,}$/.test(word);
-    });
+    const museumLine =
+      lines.find((line) =>
+        /(museum|gallery|louvre|national gallery|tate|orsay|orangerie|metropolitan|moma|미술관|박물관|루브르|오르세|내셔널)/i.test(
+          line
+        )
+      ) || "";
 
-    const possibleTitle = words
-      .filter((word) => !/^(oil|canvas|museum|gallery|collection|artist|title|born|died|active|french|italian|spanish|british|american)$/i.test(word))
-      .slice(0, 7)
-      .join(" ");
+    let artist = "";
 
-    const possibleArtist = properWords.slice(0, 4).join(" ");
+    const artistPatterns = [
+      /([A-Z][a-zA-ZÀ-ÿ.'-]+(?:\s+[A-Z][a-zA-ZÀ-ÿ.'-]+){0,4})\s*\((?:[A-Za-zÀ-ÿ\s.'-]+)\)/,
+      /([A-Z][a-zA-ZÀ-ÿ.'-]+(?:\s+[A-Z][a-zA-ZÀ-ÿ.'-]+){0,4})\s*(?:,|\s)\s*(?:active|born|died|b\.|d\.|French|Italian|Spanish|Dutch|German|British|American|Venetian|Flemish|\d{4})/i,
+    ];
+
+    for (const pattern of artistPatterns) {
+      const match = flat.match(pattern);
+      if (match?.[1]) {
+        artist = cleanValue(match[1]);
+        break;
+      }
+    }
+
+    if (!artist) {
+      const artistLine =
+        lines.find((line) =>
+          /(Titian|Tiziano|Ingres|Monet|Manet|Renoir|Van Gogh|Gogh|Picasso|Matisse|Rembrandt|Vermeer|Degas|Cézanne|Cezanne|Gauguin|Raphael|Michelangelo|Leonardo|Botticelli|Caravaggio)/i.test(
+            line
+          )
+        ) || "";
+
+      artist = cleanValue(
+        artistLine
+          .replace(/\(.+?\)/g, "")
+          .replace(
+            /\b(active|born|died|b\.|d\.|French|Italian|Spanish|Dutch|German|British|American|Venetian|Flemish)\b.*$/i,
+            ""
+          )
+          .replace(/\d{4}.*$/g, "")
+          .trim()
+      );
+    }
+
+    const knownTitlePattern =
+      /(Bacchus\s+and\s+Ariadne|La\s+Grande\s+Odalisque|Water\s+Lilies|Red\s+Boats,?\s+Argenteuil|Starry\s+Night|Mona\s+Lisa|The\s+Kiss|The\s+Birth\s+of\s+Venus|Girl\s+with\s+a\s+Pearl\s+Earring)/i;
+
+    let title = cleanValue(flat.match(knownTitlePattern)?.[1] || "");
+
+    if (!title) {
+      const metadataWords =
+        /(active|born|died|oil|canvas|panel|paper|wood|bronze|marble|collection|museum|gallery|louvre|national|gift|bequest|purchased|acquired|작가|작품|소장|미술관|박물관|French|Italian|Spanish|Dutch|German|British|American)/i;
+
+      const possibleTitleLine =
+        lines.find((line) => {
+          if (line.length < 3) return false;
+          if (line.length > 90) return false;
+          if (artist && line.toLowerCase().includes(artist.toLowerCase()))
+            return false;
+          if (metadataWords.test(line)) return false;
+          if (!/[A-Za-z가-힣]/.test(line)) return false;
+          return true;
+        }) || "";
+
+      title = cleanValue(possibleTitleLine);
+    }
+
+    if (!title) {
+      const beforeYear = flat.match(
+        /([A-Z][A-Za-zÀ-ÿ'’\-]+(?:\s+[A-Za-zÀ-ÿ'’\-]+){0,6}),?\s*(?:1[4-9]\d{2}|20\d{2})/
+      )?.[1];
+
+      title = cleanValue(beforeYear || "");
+    }
 
     return {
-      possibleTitle,
-      possibleArtist,
+      title,
+      artist,
       year,
-      cleaned,
-    };
-  };
-
-  const buildFallbackArtwork = (text) => {
-    const { possibleTitle, possibleArtist, year, cleaned } =
-      extractPossibleInfoFromOcr(text);
-
-    return {
-      title: possibleTitle || "인식된 작품",
-      artist: possibleArtist,
-      year,
-      museum: "",
-      summary: `${possibleTitle || "이 작품"}은 캡션에서 인식된 정보를 바탕으로 감상할 수 있는 작품입니다.`,
-      simpleExplanation: `카메라가 인식한 캡션에는 “${cleaned.slice(
-        0,
-        180
-      )}”라는 정보가 포함되어 있습니다. 이 정보를 기준으로 작품명, 작가명, 제작 시기, 전시 맥락을 연결해 감상할 수 있습니다. 작품을 볼 때는 먼저 화면에서 가장 눈에 띄는 대상과 전체 구도를 살펴보는 것이 좋습니다. 이후 색감, 명암, 인물의 자세, 배경의 구성 등을 함께 보면 작품이 전달하려는 분위기가 더 잘 드러납니다. 캡션의 일부가 정확하지 않더라도, 인식된 제목과 작가명으로 보이는 단어를 중심으로 작품의 주제와 표현 방식을 추정할 수 있습니다.`,
-      artistDescription: possibleArtist
-        ? `${possibleArtist}로 인식된 작가명을 기준으로 작품을 이해할 수 있습니다. 작가의 세부 정보가 완전히 인식되지 않더라도, 작품의 표현 방식과 주제에서 미술사적 단서를 찾을 수 있습니다. 인물 표현, 색감, 구도, 재료를 함께 보면 작가가 어떤 방식으로 대상을 해석했는지 파악하기 쉽습니다.`
-        : "",
-      artistIntention:
-        "작가는 작품 속 대상이나 장면을 단순히 기록하기보다, 특정한 분위기와 시선을 전달하려 했을 가능성이 큽니다. 작품의 중심부, 빛이 닿는 부분, 인물이나 사물의 방향을 따라가면 작가가 강조하고 싶은 지점을 찾을 수 있습니다. 캡션의 제목 단어와 화면 속 표현을 연결해 보면 작품의 의도가 더 선명해집니다.",
-      background:
-        "이 작품은 캡션에 포함된 제작연도, 소장처, 작가명 같은 정보를 함께 볼 때 더 잘 이해할 수 있습니다. 전시장에서는 같은 공간의 다른 작품들과 비교해 시대적 흐름과 주제의 차이를 살펴보는 것이 좋습니다. 작품의 재료와 표현 방식도 제작 배경을 이해하는 중요한 단서가 됩니다.",
-      viewingPoints: [
-        "캡션에서 작품명으로 보이는 단어와 화면 속 중심 대상을 연결해보세요.",
-        "작가명으로 보이는 고유명사를 기준으로 작품의 시대와 양식을 추정해보세요.",
-        "색감, 명암, 인물의 자세, 사물의 배치를 함께 살펴보세요.",
-        "주변 작품과 비교해 이 작품만의 분위기와 표현 방식을 찾아보세요.",
-      ],
+      museum: cleanValue(museumLine),
+      summary: "",
+      simpleExplanation: "",
+      artistDescription: "",
+      artistIntention: "",
+      background: "",
+      viewingPoints: [],
       answer: "",
-      confidence: "보통",
+      confidence: "",
     };
   };
 
@@ -271,6 +305,29 @@ export default function Home() {
     return ocrCanvas;
   };
 
+  const mergeArtworkData = (apiData, ocrData) => {
+    const safeApi = apiData || {};
+    const safeOcr = ocrData || {};
+
+    return {
+      title: cleanValue(safeApi.title) || cleanValue(safeOcr.title),
+      artist: cleanValue(safeApi.artist) || cleanValue(safeOcr.artist),
+      year: cleanValue(safeApi.year) || cleanValue(safeOcr.year),
+      museum: cleanValue(safeApi.museum) || cleanValue(safeOcr.museum),
+      summary: cleanValue(safeApi.summary),
+      simpleExplanation:
+        cleanValue(safeApi.simpleExplanation) || cleanValue(safeApi.explanation),
+      artistDescription: cleanValue(safeApi.artistDescription),
+      artistIntention: cleanValue(safeApi.artistIntention),
+      background: cleanValue(safeApi.background),
+      viewingPoints: Array.isArray(safeApi.viewingPoints)
+        ? safeApi.viewingPoints.map(cleanValue).filter(Boolean)
+        : [],
+      answer: cleanValue(safeApi.answer),
+      confidence: cleanValue(safeApi.confidence),
+    };
+  };
+
   const captureAndOCR = async () => {
     if (!videoRef.current || !canvasRef.current) return;
 
@@ -302,7 +359,9 @@ export default function Home() {
       setOcrLoading(false);
       setAiLoading(true);
 
-      let data = null;
+      const ocrCandidate = extractBasicInfoFromOcr(finalOcrText);
+
+      let apiData = null;
 
       try {
         const controller = new AbortController();
@@ -325,22 +384,15 @@ export default function Home() {
         const responseData = await response.json();
 
         if (response.ok) {
-          data = responseData;
+          apiData = responseData;
         }
       } catch (apiError) {
         console.error(apiError);
       }
 
-      if (
-        !data ||
-        (!cleanValue(data.title) &&
-          !cleanValue(data.artist) &&
-          !cleanValue(data.simpleExplanation))
-      ) {
-        data = buildFallbackArtwork(finalOcrText);
-      }
+      const merged = mergeArtworkData(apiData, ocrCandidate);
 
-      setArtwork(data);
+      setArtwork(merged);
 
       setChat([
         {
@@ -353,9 +405,9 @@ export default function Home() {
     } catch (error) {
       console.error(error);
 
-      const fallback = buildFallbackArtwork(finalOcrText);
+      const ocrCandidate = extractBasicInfoFromOcr(finalOcrText);
       setOcrText(finalOcrText || "museum artwork caption");
-      setArtwork(fallback);
+      setArtwork(ocrCandidate);
       setScreen("explain");
     } finally {
       setOcrLoading(false);
@@ -402,7 +454,7 @@ export default function Home() {
             data.simpleExplanation ||
             data.explanation ||
             data.summary ||
-            "작품의 색감, 구도, 소재를 중심으로 감상해보면 좋습니다.",
+            "해당 작품 정보가 충분히 생성되지 않았습니다.",
         },
       ]);
     } catch (error) {
@@ -412,7 +464,7 @@ export default function Home() {
         ...prev,
         {
           role: "ai",
-          text: "작품의 색감, 구도, 소재를 중심으로 감상해보면 좋습니다.",
+          text: "답변을 생성하지 못했습니다.",
         },
       ]);
     }
@@ -561,7 +613,10 @@ export default function Home() {
             )}
           </section>
 
-          {hasDetectedInfo(artwork) && (
+          {(cleanValue(artwork.title) ||
+            cleanValue(artwork.artist) ||
+            cleanValue(artwork.year) ||
+            cleanValue(artwork.museum)) && (
             <section className="detected-info-box">
               <div className="section-title">인식된 작품 정보</div>
 
@@ -595,14 +650,12 @@ export default function Home() {
             </section>
           )}
 
-          <section className="explain-card">
-            <div className="section-title">작품 해설</div>
-            <p>
-              {cleanValue(artwork.simpleExplanation) ||
-                cleanValue(artwork.explanation) ||
-                "작품의 형태, 주제, 표현 방식을 중심으로 감상해보세요."}
-            </p>
-          </section>
+          {cleanValue(artwork.simpleExplanation) && (
+            <section className="explain-card">
+              <div className="section-title">작품 해설</div>
+              <p>{cleanValue(artwork.simpleExplanation)}</p>
+            </section>
+          )}
 
           {cleanValue(artwork.artistDescription) && (
             <section className="explain-card">
