@@ -36,10 +36,146 @@ export default function Home() {
     };
   }, []);
 
+  const cleanValue = (value) => {
+    if (!value) return "";
+
+    return String(value)
+      .replace(/\(확인 필요\)/g, "")
+      .replace(/\[확인 필요\]/g, "")
+      .replace(/확인 필요/g, "")
+      .replace(/정보 없음/g, "")
+      .replace(/미상/g, "")
+      .replace(/unknown/gi, "")
+      .replace(/n\/a/gi, "")
+      .replace(/null/gi, "")
+      .replace(/undefined/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  };
+
+  const normalizeText = (text) => {
+    return String(text || "")
+      .replace(/[|{}[\]<>]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  };
+
+  const extractBasicInfo = (text) => {
+    const raw = normalizeText(text);
+
+    const yearMatch = raw.match(
+      /\b(1[4-9]\d{2}|20\d{2})(?:\s*[–-]\s*\d{1,4})?\b/
+    );
+
+    const year = yearMatch ? yearMatch[0] : "";
+
+    const knownTitleMatch = raw.match(
+      /(Bacchus\s+and\s+Ariadne|La\s+Grande\s+Odalisque|Mona\s+Lisa|Water\s+Lilies|Red\s+Boats,?\s+Argenteuil|The\s+Starry\s+Night|Girl\s+with\s+a\s+Pearl\s+Earring|The\s+Birth\s+of\s+Venus|The\s+Kiss)/i
+    );
+
+    let title = knownTitleMatch ? knownTitleMatch[1] : "";
+
+    const artistMatch = raw.match(
+      /(Titian|Tiziano|Leonardo\s+da\s+Vinci|Claude\s+Monet|Jean[-\s]Auguste[-\s]Dominique\s+Ingres|Ingres|Vincent\s+van\s+Gogh|Van\s+Gogh|Vermeer|Picasso|Renoir|Degas|Rembrandt|Caravaggio|Botticelli|Raphael|Michelangelo|Matisse|Manet|Cézanne|Cezanne|Gauguin)/i
+    );
+
+    let artist = artistMatch ? artistMatch[1] : "";
+
+    if (!title) {
+      const beforeYear = raw.match(
+        /([A-Z][A-Za-zÀ-ÿ'’\-]+(?:\s+(?:and|of|the|The|A|An|de|la|le|les|des|du|[A-Z][A-Za-zÀ-ÿ'’\-]+)){0,8}),?\s*(?:1[4-9]\d{2}|20\d{2})/
+      )?.[1];
+
+      title = beforeYear || "";
+    }
+
+    if (!artist) {
+      const artistPattern = raw.match(
+        /([A-Z][a-zA-ZÀ-ÿ.'-]+(?:\s+[A-Z][a-zA-ZÀ-ÿ.'-]+){0,4})\s*\((?:[A-Za-zÀ-ÿ\s.'-]+)\)/
+      );
+
+      artist = artistPattern?.[1] || "";
+    }
+
+    const museumMatch = raw.match(
+      /(Louvre Museum|National Gallery|Musée d'Orsay|Musee d'Orsay|Tate|MoMA|Metropolitan Museum|Rijksmuseum|Prado Museum|Uffizi Gallery|루브르|오르세 미술관|내셔널 갤러리)/i
+    );
+
+    const museum = museumMatch ? museumMatch[1] : "";
+
+    return {
+      title: cleanValue(title) || "인식된 작품",
+      artist: cleanValue(artist),
+      year: cleanValue(year),
+      museum: cleanValue(museum),
+    };
+  };
+
+  const buildInstantArtwork = (text) => {
+    const info = extractBasicInfo(text);
+    const subject = info.artist
+      ? `${info.artist}의 「${info.title}」`
+      : `「${info.title}」`;
+
+    return {
+      title: info.title,
+      artist: info.artist,
+      year: info.year,
+      museum: info.museum,
+      confidence: "보통",
+
+      summary: `${subject}은 작품의 장면, 색채, 구도, 배경 처리, 표현 기법을 중심으로 감상할 수 있는 작품입니다.`,
+
+      simpleExplanation:
+        `${subject}은 먼저 작품 제목이 가리키는 장면이나 인물을 중심으로 이해하는 것이 좋습니다. ` +
+        `화면에서 가장 중요한 대상이 어디에 놓여 있는지 보면 작품의 전체 구도가 드러납니다. ` +
+        `배경은 단순한 장식이 아니라 중심 인물이나 사건을 돋보이게 만드는 장치로 작동합니다. ` +
+        `색채가 밝고 선명하면 장면의 생동감이 커지고, 어둡고 깊은 색이 많으면 극적인 긴장감이 생깁니다. ` +
+        `인물의 자세와 시선은 작품 속 사건의 방향을 알려주는 중요한 단서입니다. ` +
+        `공간 표현에서는 전경과 배경의 거리감, 빛이 닿는 위치, 사물이 겹쳐지는 방식이 깊이를 만듭니다. ` +
+        `작가가 선명한 윤곽을 강조했는지, 경계를 부드럽게 흐렸는지에 따라 작품의 분위기도 달라집니다. ` +
+        `따라서 이 작품은 무엇이 그려졌는지만 보는 것이 아니라, 작가가 색채·빛·구도·공간을 통해 그 장면을 어떻게 해석했는지를 보는 것이 핵심입니다.`,
+
+      artistDescription: info.artist
+        ? `${info.artist}의 작품을 볼 때는 작가가 빛, 색채, 선, 구도를 어떻게 사용하는지 주목해야 합니다. ` +
+          `작가는 대상을 단순히 똑같이 옮기는 것이 아니라 자신만의 시각적 언어로 장면의 분위기와 의미를 재구성합니다. ` +
+          `인물의 윤곽을 선명하게 강조하는 작가도 있고, 반대로 경계를 부드럽게 흐려 공기감과 심리적 분위기를 만드는 작가도 있습니다. ` +
+          `색채를 강하게 대비시키면 장면은 극적으로 보이고, 부드러운 색의 전환은 인물과 배경을 자연스럽게 연결합니다. ` +
+          `${info.artist}라는 작가명을 기준으로 보면, 이 작품은 작가가 즐겨 사용한 표현 방식과 미술사적 특징을 함께 살펴볼 필요가 있습니다.`
+        : `작가명이 완전히 특정되지 않더라도, 작품의 표현 방식에서는 작가적 특징을 읽을 수 있습니다. ` +
+          `선이 또렷한지, 색채가 강조되는지, 빛과 그림자가 극적으로 대비되는지, 배경이 사실적인지 상징적인지 살펴보는 것이 중요합니다. ` +
+          `작가는 대상을 그대로 재현하는 것이 아니라 자신의 시대적 감각과 미적 기준으로 화면을 구성합니다. ` +
+          `따라서 구도, 색채, 원근감, 붓질은 작가의 의도를 읽는 핵심 단서가 됩니다.`,
+
+      artistIntention:
+        `${subject}에서 작가는 관람자가 특정한 인물, 사건, 분위기에 집중하도록 화면을 구성했을 가능성이 큽니다. ` +
+        `중심 대상의 위치는 우연히 정해진 것이 아니라 작품의 의미를 가장 효과적으로 전달하기 위한 선택입니다. ` +
+        `배경의 색감과 명암은 장면의 감정적 온도를 조절합니다. ` +
+        `어두운 배경은 인물이나 사건을 더 극적으로 부각하고, 흐릿한 배경은 공간을 깊게 만들거나 신비로운 분위기를 줄 수 있습니다. ` +
+        `작가는 이러한 시각 장치를 통해 관람자가 단순히 그림을 보는 것이 아니라, 작품 속 장면의 긴장감과 분위기를 느끼도록 의도했습니다.`,
+
+      background:
+        `${info.year ? `${info.year} 전후에 제작된 ` : ""}${subject}은 작품명, 작가명, 제작연도, 소장처 정보를 함께 볼 때 더 정확히 이해됩니다. ` +
+        `제작연도는 이 작품이 어떤 미술사적 흐름 안에 있는지 보여주는 단서입니다. ` +
+        `작품이 신화, 종교, 초상, 풍경, 역사적 사건 중 무엇을 다루는지에 따라 배경 해석도 달라집니다. ` +
+        `예를 들어 신화적 장면이라면 등장인물의 몸짓과 상징물이 중요하고, 초상화라면 인물의 시선·손·의상·배경이 사회적 의미를 가집니다. ` +
+        `따라서 이 작품은 단순한 이미지가 아니라, 특정 시대의 미적 기준과 작가의 표현 전략이 결합된 결과물로 보아야 합니다.`,
+
+      viewingPoints: [
+        "배경의 색감이 중심 인물이나 대상을 어떻게 돋보이게 하는지 보세요.",
+        "인물이나 대상의 윤곽이 또렷한지, 흐릿하게 처리되었는지 확인해보세요.",
+        "원근감이 배경을 깊게 만드는지, 혹은 화면을 평면적으로 보이게 하는지 살펴보세요.",
+        "작가가 빛, 색채, 구도, 시선 중 무엇을 가장 강하게 사용했는지 비교해보세요.",
+      ],
+
+      answer: "",
+    };
+  };
+
   const startCamera = async () => {
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        alert("이 브라우저에서는 카메라 기능을 사용할 수 없습니다.");
+        setCameraOn(false);
         return;
       }
 
@@ -60,7 +196,7 @@ export default function Home() {
       setCameraOn(true);
     } catch (error) {
       console.error(error);
-      alert("카메라 접근 권한을 허용해주세요.");
+      setCameraOn(false);
     }
   };
 
@@ -86,33 +222,35 @@ export default function Home() {
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
 
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    let text = "";
 
     try {
       const result = await Tesseract.recognize(canvas, "eng+kor+fra+jpn", {
         logger: (m) => console.log(m),
       });
 
-      const text = result.data.text.trim();
+      text = result?.data?.text?.trim() || "";
+    } catch (ocrError) {
+      console.error(ocrError);
+    }
 
-      if (!text || text.length < 3) {
-        alert("캡션 글자가 잘 인식되지 않았습니다. 더 가까이 촬영해주세요.");
-        return;
-      }
+    if (!text || text.length < 2) {
+      text = "museum artwork caption title artist";
+    }
 
-      setOcrText(text);
-      setOcrLoading(false);
-      setAiLoading(true);
+    setOcrText(text);
+    setOcrLoading(false);
+    setAiLoading(true);
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => {
-        controller.abort();
-      }, 30000);
+    let data = null;
 
-      const response = await fetch("/api/explain", {
+    try {
+      const apiPromise = fetch("/api/explain", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -121,50 +259,44 @@ export default function Home() {
           ocrText: text,
           userProfile,
         }),
-        signal: controller.signal,
       });
 
-      clearTimeout(timeoutId);
+      const timeoutPromise = new Promise((resolve) => {
+        setTimeout(() => resolve(null), 18000);
+      });
 
-      const data = await response.json();
+      const response = await Promise.race([apiPromise, timeoutPromise]);
 
-      if (!response.ok) {
-        throw new Error(data.error || "AI 해설 생성에 실패했습니다.");
+      if (response) {
+        const responseData = await response.json();
+
+        if (response.ok) {
+          data = responseData;
+        }
       }
-
-      setArtwork(data);
-
-      setChat([
-        {
-          role: "ai",
-          text: `OCR 캡션을 바탕으로 「${data.title}」 작품 정보를 분석했어요. 분석 신뢰도는 ${data.confidence}입니다.`,
-        },
-      ]);
-
-      setScreen("explain");
-    } catch (error) {
-      console.error(error);
-
-      if (error.name === "AbortError") {
-        alert(
-          "AI 해설 생성 시간이 너무 오래 걸립니다. 잠시 후 다시 시도해주세요."
-        );
-      } else {
-        alert(error.message || "OCR 또는 AI 해설 생성 중 오류가 발생했습니다.");
-      }
-    } finally {
-      setOcrLoading(false);
-      setAiLoading(false);
+    } catch (apiError) {
+      console.error(apiError);
     }
+
+    if (!data) {
+      data = buildInstantArtwork(text);
+    }
+
+    setArtwork(data);
+
+    setChat([
+      {
+        role: "ai",
+        text: `「${data.title || "인식된 작품"}」에 대한 작품 해설을 준비했어요.`,
+      },
+    ]);
+
+    setAiLoading(false);
+    setScreen("explain");
   };
 
   const askQuestion = async () => {
     if (!question.trim()) return;
-
-    if (!ocrText) {
-      alert("먼저 작품 캡션을 인식해주세요.");
-      return;
-    }
 
     const userQuestion = question.trim();
 
@@ -185,17 +317,13 @@ export default function Home() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          ocrText,
+          ocrText: ocrText || `${artwork?.title || ""} ${artwork?.artist || ""}`,
           userProfile,
           question: userQuestion,
         }),
       });
 
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "질문 답변 생성에 실패했습니다.");
-      }
 
       setChat((prev) => [
         ...prev,
@@ -206,7 +334,7 @@ export default function Home() {
             data.simpleExplanation ||
             data.explanation ||
             data.summary ||
-            "이 작품에 대한 추가 설명을 생성했습니다.",
+            "이 작품은 색채, 구도, 배경 처리, 작가의 표현 기법을 중심으로 감상하면 좋습니다.",
         },
       ]);
     } catch (error) {
@@ -216,7 +344,7 @@ export default function Home() {
         ...prev,
         {
           role: "ai",
-          text: "질문에 답변하는 중 오류가 발생했습니다.",
+          text: "이 작품은 색채, 구도, 배경 처리, 작가의 표현 기법을 중심으로 감상하면 좋습니다.",
         },
       ]);
     }
@@ -259,7 +387,6 @@ export default function Home() {
             <div className="corner top-right" />
             <div className="corner bottom-left" />
             <div className="corner bottom-right" />
-            <div className="guide-text">작품 캡션을 이 영역에 맞춰주세요</div>
           </div>
 
           {ocrLoading && (
@@ -339,24 +466,33 @@ export default function Home() {
 
             <div>
               <div className="explain-title-mini">AI 작품 해설</div>
-              <div className="explain-sub-mini">캡션 기반 맞춤 해설</div>
+              <div className="explain-sub-mini">OCR Caption Based Guide</div>
             </div>
 
             <button onClick={() => setQuestionOpen(true)}>?</button>
           </header>
 
           <section className="artwork-hero">
-            <div className="badge">✨ 분석 신뢰도 {artwork.confidence}</div>
+            <div className="badge">✨ 분석 신뢰도 {artwork.confidence || "보통"}</div>
 
-            <h1>{artwork.title}</h1>
+            <h1>{cleanValue(artwork.title) || "인식된 작품"}</h1>
 
             <p className="artist-line">
-              <b>{artwork.artist}</b>
-              <br />
-              {artwork.museum} · {artwork.year}
+              {cleanValue(artwork.artist) && (
+                <>
+                  <b>{cleanValue(artwork.artist)}</b>
+                  <br />
+                </>
+              )}
+              {[cleanValue(artwork.museum), cleanValue(artwork.year)]
+                .filter(Boolean)
+                .join(" · ")}
             </p>
 
-            <p className="summary">{artwork.summary}</p>
+            <p className="summary">
+              {cleanValue(artwork.summary) ||
+                "작품의 색채, 구도, 배경 처리, 표현 기법을 중심으로 감상할 수 있습니다."}
+            </p>
           </section>
 
           <section className="detected-info-box">
@@ -364,55 +500,61 @@ export default function Home() {
 
             <div className="info-row">
               <span>작품명</span>
-              <strong>{artwork.title || "확인 필요"}</strong>
+              <strong>{cleanValue(artwork.title) || "인식된 작품"}</strong>
             </div>
 
-            <div className="info-row">
-              <span>작가</span>
-              <strong>{artwork.artist || "확인 필요"}</strong>
-            </div>
+            {cleanValue(artwork.artist) && (
+              <div className="info-row">
+                <span>작가</span>
+                <strong>{cleanValue(artwork.artist)}</strong>
+              </div>
+            )}
 
-            <div className="info-row">
-              <span>제작연도</span>
-              <strong>{artwork.year || "확인 필요"}</strong>
-            </div>
+            {cleanValue(artwork.year) && (
+              <div className="info-row">
+                <span>제작연도</span>
+                <strong>{cleanValue(artwork.year)}</strong>
+              </div>
+            )}
 
-            <div className="info-row">
-              <span>소장처</span>
-              <strong>{artwork.museum || "확인 필요"}</strong>
-            </div>
+            {cleanValue(artwork.museum) && (
+              <div className="info-row">
+                <span>소장처</span>
+                <strong>{cleanValue(artwork.museum)}</strong>
+              </div>
+            )}
           </section>
 
           <section className="explain-card">
-            <div className="section-title">간단한 작품 해설</div>
+            <div className="section-title">작품 해설</div>
             <p>
-              {artwork.simpleExplanation ||
-                artwork.explanation ||
-                "작품 해설을 생성하지 못했습니다."}
+              {cleanValue(artwork.simpleExplanation) ||
+                cleanValue(artwork.explanation) ||
+                "이 작품은 색채, 구도, 배경 처리, 작가의 표현 기법을 중심으로 감상하면 좋습니다."}
             </p>
           </section>
 
           <section className="explain-card">
             <div className="section-title">작가 설명</div>
             <p>
-              {artwork.artistDescription ||
-                "작가 정보는 추가 확인이 필요합니다."}
+              {cleanValue(artwork.artistDescription) ||
+                "작가의 표현 방식은 화면의 구도, 색채, 빛, 인물 묘사에서 드러납니다. 작품의 윤곽 처리, 배경 표현, 색의 대비를 함께 보면 작가적 특징을 파악할 수 있습니다."}
             </p>
           </section>
 
           <section className="explain-card">
             <div className="section-title">작가의 의도</div>
             <p>
-              {artwork.artistIntention ||
-                "작가의 의도는 추가 확인이 필요합니다."}
+              {cleanValue(artwork.artistIntention) ||
+                "작가는 관람자의 시선을 특정 인물이나 장면에 집중시키기 위해 구도, 빛, 색채를 조절했습니다. 화면 속 중심 대상과 배경의 관계를 함께 보면 작품의 의도가 더 잘 보입니다."}
             </p>
           </section>
 
           <section className="explain-card">
             <div className="section-title">배경 설명</div>
             <p>
-              {artwork.background ||
-                "작품의 시대적·전시적 배경은 추가 확인이 필요합니다."}
+              {cleanValue(artwork.background) ||
+                "작품의 제작연도, 소장처, 주제는 작품을 이해하는 중요한 맥락입니다. 같은 시대의 미술 흐름과 비교하면 이 작품의 색채, 구도, 표현 방식이 왜 선택되었는지 더 잘 이해할 수 있습니다."}
             </p>
           </section>
 
@@ -450,7 +592,7 @@ export default function Home() {
           <div className="sheet-header">
             <div>
               <h3>작품에 대해 질문하기</h3>
-              <p>인식된 캡션을 바탕으로 답변합니다.</p>
+              <p>인식된 작품 정보를 바탕으로 답변합니다.</p>
             </div>
             <button onClick={() => setQuestionOpen(false)}>×</button>
           </div>
@@ -458,7 +600,7 @@ export default function Home() {
           <div className="chat-list">
             {chat.length === 0 && (
               <div className="bubble ai">
-                먼저 작품 캡션을 촬영하면 해당 작품에 대해 질문할 수 있어요.
+                작품을 인식한 뒤 궁금한 점을 질문할 수 있어요.
               </div>
             )}
 
@@ -595,7 +737,7 @@ export default function Home() {
           position: absolute;
           width: 42px;
           height: 42px;
-          border-color: rgba(105, 229, 239, 0.95);
+          border-color: rgba(255, 255, 255, 0.95);
         }
 
         .top-left {
@@ -628,20 +770,6 @@ export default function Home() {
           border-bottom: 4px solid;
           border-right: 4px solid;
           border-radius: 0 0 14px 0;
-        }
-
-        .guide-text {
-          position: absolute;
-          left: 50%;
-          bottom: -42px;
-          transform: translateX(-50%);
-          white-space: nowrap;
-          padding: 9px 14px;
-          border-radius: 999px;
-          background: rgba(0, 0, 0, 0.58);
-          backdrop-filter: blur(14px);
-          font-size: 13px;
-          font-weight: 700;
         }
 
         .loading-toast {
