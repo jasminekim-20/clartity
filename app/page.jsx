@@ -143,6 +143,7 @@ export default function Home() {
         },
       ]);
 
+      setQuestionOpen(false);
       setScreen("explain");
     } catch (error) {
       console.error(error);
