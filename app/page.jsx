@@ -18,9 +18,12 @@ export default function Home() {
   const [ocrText, setOcrText] = useState("");
   const [artwork, setArtwork] = useState(null);
 
-  const [questionOpen, setQuestionOpen] = useState(false);
-  const [question, setQuestion] = useState("");
-  const [chat, setChat] = useState([]);
+  const [correctionOpen, setCorrectionOpen] = useState(false);
+  const [manualTitle, setManualTitle] = useState("");
+  const [manualArtist, setManualArtist] = useState("");
+  const [correctionLoading, setCorrectionLoading] = useState(false);
+
+  const [artworkConfirmed, setArtworkConfirmed] = useState(false);
 
   const userProfile = {
     level: "미술 입문자",
@@ -38,6 +41,9 @@ export default function Home() {
 
   const startCamera = async () => {
     try {
+      setCorrectionOpen(false);
+      setArtworkConfirmed(false);
+
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         alert("이 브라우저에서는 카메라 기능을 사용할 수 없습니다.");
         return;
@@ -76,13 +82,14 @@ export default function Home() {
   const captureAndOCR = async () => {
     if (!videoRef.current || !canvasRef.current) return;
 
-    setQuestionOpen(false);
+    setCorrectionOpen(false);
+    setArtworkConfirmed(false);
     setMode("camera");
+
     setOcrLoading(true);
     setAiLoading(false);
     setOcrText("");
     setArtwork(null);
-    setChat([]);
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -135,15 +142,7 @@ export default function Home() {
       }
 
       setArtwork(data);
-
-      setChat([
-        {
-          role: "ai",
-          text: `OCR 캡션을 바탕으로 「${data.title}」 작품 정보를 분석했어요. 분석 신뢰도는 ${data.confidence}입니다.`,
-        },
-      ]);
-
-      setQuestionOpen(false);
+      setCorrectionOpen(false);
       setScreen("explain");
     } catch (error) {
       console.error(error);
@@ -161,25 +160,12 @@ export default function Home() {
     }
   };
 
-  const askQuestion = async () => {
-    if (!question.trim()) return;
-
-    if (!ocrText) {
-      alert("먼저 작품 캡션을 인식해주세요.");
+  const regenerateWithCorrection = async () => {
+    if (!manualTitle.trim() && !manualArtist.trim()) {
       return;
     }
 
-    const userQuestion = question.trim();
-
-    setChat((prev) => [
-      ...prev,
-      {
-        role: "user",
-        text: userQuestion,
-      },
-    ]);
-
-    setQuestion("");
+    setCorrectionLoading(true);
 
     try {
       const response = await fetch("/api/explain", {
@@ -188,40 +174,34 @@ export default function Home() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          ocrText,
+          ocrText:
+            ocrText ||
+            `사용자가 직접 입력한 작품 정보: ${manualTitle} ${manualArtist}`,
           userProfile,
-          question: userQuestion,
+          manualTitle: manualTitle.trim(),
+          manualArtist: manualArtist.trim(),
         }),
       });
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || "질문 답변 생성에 실패했습니다.");
+        throw new Error(
+          data.error || "수정된 작품 정보로 해설을 생성하지 못했습니다."
+        );
       }
 
-      setChat((prev) => [
-        ...prev,
-        {
-          role: "ai",
-          text:
-            data.answer ||
-            data.simpleExplanation ||
-            data.explanation ||
-            data.summary ||
-            "이 작품에 대한 추가 설명을 생성했습니다.",
-        },
-      ]);
+      setArtwork(data);
+      setCorrectionOpen(false);
+      setArtworkConfirmed(true);
+      setManualTitle("");
+      setManualArtist("");
+      setScreen("explain");
     } catch (error) {
       console.error(error);
-
-      setChat((prev) => [
-        ...prev,
-        {
-          role: "ai",
-          text: "질문에 답변하는 중 오류가 발생했습니다.",
-        },
-      ]);
+      alert(error.message || "작품 정보를 수정하는 중 오류가 발생했습니다.");
+    } finally {
+      setCorrectionLoading(false);
     }
   };
 
@@ -247,14 +227,18 @@ export default function Home() {
           )}
 
           <div className="top-bar">
-            <button className="icon-btn">‹</button>
+            <button className="icon-btn" type="button">
+              ‹
+            </button>
 
             <div className="app-pill">
               <span className="app-dot" />
               Clartity
             </div>
 
-            <button className="icon-btn">?</button>
+            <button className="icon-btn" type="button">
+              ·
+            </button>
           </div>
 
           <div className="scan-guide">
@@ -280,17 +264,27 @@ export default function Home() {
           </div>
 
           <div className="camera-controls">
-            <button className="round-control">▧</button>
+            <button className="round-control" type="button">
+              ▧
+            </button>
 
-            <button className="shutter" onClick={captureAndOCR}>
+            <button
+              className="shutter"
+              type="button"
+              onClick={captureAndOCR}
+              disabled={ocrLoading || aiLoading}
+            >
               <span />
             </button>
 
-            <button className="round-control">⌁</button>
+            <button className="round-control" type="button">
+              ⌁
+            </button>
           </div>
 
           <nav className="bottom-tabs">
             <button
+              type="button"
               className={mode === "translate" ? "active" : ""}
               onClick={() => setMode("translate")}
             >
@@ -299,6 +293,7 @@ export default function Home() {
             </button>
 
             <button
+              type="button"
               className={mode === "camera" ? "active" : ""}
               onClick={() => setMode("camera")}
             >
@@ -307,17 +302,7 @@ export default function Home() {
             </button>
 
             <button
-              className={mode === "chat" ? "active" : ""}
-              onClick={() => {
-                setMode("chat");
-                setQuestionOpen(true);
-              }}
-            >
-              <span>👥</span>
-              대화
-            </button>
-
-            <button
+              type="button"
               className={mode === "save" ? "active" : ""}
               onClick={() => setMode("save")}
             >
@@ -332,7 +317,9 @@ export default function Home() {
         <section className="explain-screen">
           <header className="explain-header">
             <button
+              type="button"
               onClick={() => {
+                setCorrectionOpen(false);
                 setScreen("camera");
                 setTimeout(() => startCamera(), 300);
               }}
@@ -345,8 +332,92 @@ export default function Home() {
               <div className="explain-sub-mini">캡션 기반 맞춤 해설</div>
             </div>
 
-            <button onClick={() => setQuestionOpen(true)}>?</button>
+            <button type="button">·</button>
           </header>
+
+          <section className="confirm-card">
+            <div>
+              <h3>이 작품이 맞나요?</h3>
+              <p>
+                AI가 캡션을 잘못 읽었을 수 있어요. 작품 정보가 다르면 직접
+                수정해서 해설을 다시 볼 수 있습니다.
+              </p>
+            </div>
+
+            <div className="confirm-actions">
+              <button
+                type="button"
+                className={artworkConfirmed ? "confirm-btn active" : "confirm-btn"}
+                onClick={() => {
+                  setArtworkConfirmed(true);
+                  setCorrectionOpen(false);
+                }}
+              >
+                {artworkConfirmed ? "확인 완료" : "맞아요"}
+              </button>
+
+              <button
+                type="button"
+                className="edit-artwork-btn"
+                onClick={() => {
+                  setArtworkConfirmed(false);
+                  setManualTitle(
+                    artwork.title && !artwork.title.includes("명확하지")
+                      ? artwork.title
+                      : ""
+                  );
+                  setManualArtist(
+                    artwork.artist && !artwork.artist.includes("명확하지")
+                      ? artwork.artist
+                      : ""
+                  );
+                  setCorrectionOpen((prev) => !prev);
+                }}
+              >
+                아니요, 직접 입력할래요
+              </button>
+            </div>
+          </section>
+
+          {correctionOpen && (
+            <section className="inline-correction-card">
+              <div className="section-title">작품 정보 직접 입력</div>
+
+              <div className="inline-correction-form">
+                <label>
+                  작품명
+                  <input
+                    value={manualTitle}
+                    onChange={(e) => setManualTitle(e.target.value)}
+                    placeholder="예: 모나리자"
+                  />
+                </label>
+
+                <label>
+                  작가명
+                  <input
+                    value={manualArtist}
+                    onChange={(e) => setManualArtist(e.target.value)}
+                    placeholder="예: 레오나르도 다빈치"
+                  />
+                </label>
+              </div>
+
+              <button
+                type="button"
+                className="submit-inline-correction"
+                onClick={regenerateWithCorrection}
+                disabled={
+                  correctionLoading ||
+                  (!manualTitle.trim() && !manualArtist.trim())
+                }
+              >
+                {correctionLoading
+                  ? "해설 다시 생성 중..."
+                  : "이 정보로 다시 해설 보기"}
+              </button>
+            </section>
+          )}
 
           <section className="artwork-hero">
             <div className="badge">✨ 분석 신뢰도 {artwork.confidence}</div>
@@ -367,22 +438,30 @@ export default function Home() {
 
             <div className="info-row">
               <span>작품명</span>
-              <strong>{artwork.title || "확인 필요"}</strong>
+              <strong>
+                {artwork.title || "작품명 정보가 명확하지 않습니다"}
+              </strong>
             </div>
 
             <div className="info-row">
               <span>작가</span>
-              <strong>{artwork.artist || "확인 필요"}</strong>
+              <strong>
+                {artwork.artist || "작가 정보가 명확하지 않습니다"}
+              </strong>
             </div>
 
             <div className="info-row">
               <span>제작연도</span>
-              <strong>{artwork.year || "확인 필요"}</strong>
+              <strong>
+                {artwork.year || "제작연도 정보가 명확하지 않습니다"}
+              </strong>
             </div>
 
             <div className="info-row">
               <span>소장처</span>
-              <strong>{artwork.museum || "확인 필요"}</strong>
+              <strong>
+                {artwork.museum || "소장처 정보가 명확하지 않습니다"}
+              </strong>
             </div>
           </section>
 
@@ -434,56 +513,12 @@ export default function Home() {
             </section>
           )}
 
-          <div className="bottom-action-area">
-            <button
-              className="ghost-action"
-              onClick={() => setQuestionOpen(true)}
-            >
-              AI에게 질문
+          <div className="bottom-action-area single">
+            <button type="button" className="primary-action">
+              기록에 저장
             </button>
-            <button className="primary-action">기록에 저장</button>
           </div>
         </section>
-      )}
-
-      {questionOpen && (
-        <div className="chat-sheet">
-          <div className="sheet-handle" />
-
-          <div className="sheet-header">
-            <div>
-              <h3>작품에 대해 질문하기</h3>
-              <p>인식된 캡션을 바탕으로 답변합니다.</p>
-            </div>
-            <button onClick={() => setQuestionOpen(false)}>×</button>
-          </div>
-
-          <div className="chat-list">
-            {chat.length === 0 && (
-              <div className="bubble ai">
-                먼저 작품 캡션을 촬영하면 해당 작품에 대해 질문할 수 있어요.
-              </div>
-            )}
-
-            {chat.map((m, i) => (
-              <div key={i} className={`bubble ${m.role}`}>
-                {m.text}
-              </div>
-            ))}
-          </div>
-
-          <div className="question-box">
-            <input
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              placeholder="예: 이 작품은 왜 유명해?"
-              onKeyDown={(e) => {
-                if (e.key === "Enter") askQuestion();
-              }}
-            />
-            <button onClick={askQuestion}>↑</button>
-          </div>
-        </div>
       )}
 
       <style jsx global>{`
@@ -501,6 +536,11 @@ export default function Home() {
         button {
           cursor: pointer;
           font-family: inherit;
+        }
+
+        button:disabled {
+          cursor: not-allowed;
+          opacity: 0.55;
         }
 
         .app {
@@ -734,7 +774,7 @@ export default function Home() {
           right: 0;
           bottom: 18px;
           display: grid;
-          grid-template-columns: repeat(4, 1fr);
+          grid-template-columns: repeat(3, 1fr);
           padding: 0 18px;
         }
 
@@ -797,7 +837,7 @@ export default function Home() {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          margin-bottom: 26px;
+          margin-bottom: 18px;
         }
 
         .explain-header button {
@@ -824,7 +864,104 @@ export default function Home() {
           font-size: 10px;
           color: #8c89a0;
           letter-spacing: 0.1em;
-          text-transform: uppercase;
+        }
+
+        .confirm-card,
+        .inline-correction-card,
+        .detected-info-box,
+        .explain-card {
+          margin-top: 18px;
+          padding: 20px;
+          border-radius: 28px;
+          background: rgba(255, 255, 255, 0.94);
+          border: 1px solid #eeeaf4;
+          box-shadow: 0 14px 35px rgba(40, 35, 80, 0.07);
+        }
+
+        .confirm-card {
+          margin-top: 0;
+          margin-bottom: 18px;
+        }
+
+        .confirm-card h3 {
+          margin: 0;
+          font-size: 21px;
+          font-weight: 900;
+          letter-spacing: -0.04em;
+        }
+
+        .confirm-card p {
+          margin: 8px 0 0;
+          color: #777184;
+          font-size: 14px;
+          line-height: 1.55;
+        }
+
+        .confirm-actions {
+          display: grid;
+          grid-template-columns: 0.8fr 1.4fr;
+          gap: 10px;
+          margin-top: 16px;
+        }
+
+        .confirm-btn,
+        .edit-artwork-btn,
+        .submit-inline-correction {
+          border: none;
+          border-radius: 18px;
+          padding: 15px 12px;
+          font-size: 14px;
+          font-weight: 900;
+        }
+
+        .confirm-btn {
+          background: #f0eaff;
+          color: #7254e8;
+        }
+
+        .confirm-btn.active {
+          background: #e6fff7;
+          color: #168466;
+        }
+
+        .edit-artwork-btn,
+        .submit-inline-correction {
+          background: linear-gradient(135deg, #7357ff, #bd43ff);
+          color: #fff;
+        }
+
+        .inline-correction-card {
+          margin-top: 0;
+          margin-bottom: 18px;
+        }
+
+        .inline-correction-form {
+          display: grid;
+          gap: 14px;
+        }
+
+        .inline-correction-form label {
+          display: grid;
+          gap: 8px;
+          color: #444153;
+          font-size: 14px;
+          font-weight: 900;
+        }
+
+        .inline-correction-form input {
+          width: 100%;
+          border: 1px solid #e7e4ef;
+          border-radius: 17px;
+          padding: 14px;
+          outline: none;
+          color: #171729;
+          background: #fbfaff;
+          font-size: 15px;
+        }
+
+        .submit-inline-correction {
+          width: 100%;
+          margin-top: 16px;
         }
 
         .artwork-hero {
@@ -865,16 +1002,6 @@ export default function Home() {
           line-height: 1.55;
           font-weight: 800;
           letter-spacing: -0.04em;
-        }
-
-        .detected-info-box,
-        .explain-card {
-          margin-top: 18px;
-          padding: 20px;
-          border-radius: 28px;
-          background: rgba(255, 255, 255, 0.94);
-          border: 1px solid #eeeaf4;
-          box-shadow: 0 14px 35px rgba(40, 35, 80, 0.07);
         }
 
         .section-title {
@@ -962,7 +1089,10 @@ export default function Home() {
           gap: 12px;
         }
 
-        .ghost-action,
+        .bottom-action-area.single {
+          grid-template-columns: 1fr;
+        }
+
         .primary-action {
           border: none;
           border-radius: 22px;
@@ -970,125 +1100,8 @@ export default function Home() {
           font-size: 16px;
           font-weight: 900;
           box-shadow: 0 14px 35px rgba(45, 35, 90, 0.18);
-        }
-
-        .ghost-action {
-          background: #fff;
-          color: #7254e8;
-          border: 1px solid #e8e0ff;
-        }
-
-        .primary-action {
           background: linear-gradient(135deg, #7357ff, #bd43ff);
           color: #fff;
-        }
-
-        .chat-sheet {
-          position: fixed;
-          z-index: 30;
-          left: 0;
-          right: 0;
-          bottom: 0;
-          height: 58vh;
-          padding: 12px 20px 24px;
-          border-radius: 30px 30px 0 0;
-          background: rgba(255, 255, 255, 0.96);
-          color: #171729;
-          backdrop-filter: blur(20px);
-          box-shadow: 0 -20px 50px rgba(0, 0, 0, 0.24);
-          display: flex;
-          flex-direction: column;
-        }
-
-        .sheet-handle {
-          width: 46px;
-          height: 5px;
-          border-radius: 999px;
-          background: #d5d2df;
-          margin: 0 auto 14px;
-        }
-
-        .sheet-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
-          gap: 12px;
-        }
-
-        .sheet-header h3 {
-          margin: 0;
-          font-size: 22px;
-          letter-spacing: -0.04em;
-        }
-
-        .sheet-header p {
-          margin: 5px 0 0;
-          color: #777184;
-          font-size: 13px;
-        }
-
-        .sheet-header button {
-          width: 36px;
-          height: 36px;
-          border-radius: 999px;
-          border: none;
-          background: #f1eff7;
-          font-size: 22px;
-        }
-
-        .chat-list {
-          flex: 1;
-          overflow-y: auto;
-          margin-top: 18px;
-          display: flex;
-          flex-direction: column;
-          gap: 10px;
-        }
-
-        .bubble {
-          max-width: 84%;
-          padding: 13px 15px;
-          border-radius: 18px;
-          font-size: 14px;
-          line-height: 1.55;
-        }
-
-        .bubble.ai {
-          background: #f3f1fb;
-          color: #333044;
-          border-top-left-radius: 6px;
-        }
-
-        .bubble.user {
-          align-self: flex-end;
-          background: #171729;
-          color: #fff;
-          border-top-right-radius: 6px;
-        }
-
-        .question-box {
-          display: flex;
-          gap: 8px;
-          margin-top: 14px;
-        }
-
-        .question-box input {
-          flex: 1;
-          border: 1px solid #e7e4ef;
-          border-radius: 18px;
-          padding: 14px;
-          outline: none;
-          font-size: 15px;
-        }
-
-        .question-box button {
-          width: 50px;
-          border-radius: 18px;
-          border: none;
-          background: #7d55ea;
-          color: #fff;
-          font-size: 20px;
-          font-weight: 900;
         }
 
         @media (min-width: 700px) {
@@ -1103,15 +1116,6 @@ export default function Home() {
             border: 8px solid #111;
             overflow: hidden;
             box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
-          }
-
-          .chat-sheet {
-            left: 50%;
-            right: auto;
-            width: 430px;
-            transform: translateX(-50%);
-            bottom: 24px;
-            border-radius: 30px;
           }
 
           body {
