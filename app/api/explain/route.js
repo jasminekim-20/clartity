@@ -75,12 +75,15 @@ function extractCandidatesFromOcr(ocrText) {
     .map((line) => line.replace(/\s+/g, " ").trim())
     .filter(Boolean);
 
-  const yearMatch = flat.match(/\b(1[4-9]\d{2}|20\d{2})(?:\s*[–-]\s*\d{1,4})?\b/);
+  const yearMatch = flat.match(
+    /\b(1[4-9]\d{2}|20\d{2})(?:\s*[–-]\s*\d{1,4})?\b/
+  );
+
   const year = yearMatch ? yearMatch[0] : "";
 
   const museumLine =
     lines.find((line) =>
-      /(museum|gallery|louvre|national gallery|tate|orsay|orangerie|metropolitan|moma|미술관|박물관|루브르|오르세|내셔널)/i.test(
+      /(museum|gallery|louvre|national gallery|tate|orsay|orangerie|metropolitan|moma|rijksmuseum|prado|uffizi|미술관|박물관|루브르|오르세|내셔널)/i.test(
         line
       )
     ) || "";
@@ -100,48 +103,28 @@ function extractCandidatesFromOcr(ocrText) {
     }
   }
 
-  if (!artist) {
-    const artistLine =
-      lines.find((line) =>
-        /(Titian|Tiziano|Ingres|Monet|Manet|Renoir|Van Gogh|Gogh|Picasso|Matisse|Rembrandt|Vermeer|Degas|Cézanne|Cezanne|Gauguin|Raphael|Michelangelo|Leonardo|Botticelli|Caravaggio)/i.test(
-          line
-        )
-      ) || "";
-
-    artist = cleanField(
-      artistLine
-        .replace(/\(.+?\)/g, "")
-        .replace(/\b(active|born|died|b\.|d\.|French|Italian|Spanish|Dutch|German|British|American|Venetian|Flemish)\b.*$/i, "")
-        .replace(/\d{4}.*$/g, "")
-        .trim()
-    );
-  }
-
   const metadataWords =
-    /(active|born|died|oil|canvas|panel|paper|wood|bronze|marble|collection|museum|gallery|louvre|national|gift|bequest|purchased|acquired|작가|작품|소장|미술관|박물관|French|Italian|Spanish|Dutch|German|British|American)/i;
+    /(active|born|died|oil|canvas|panel|paper|wood|bronze|marble|collection|museum|gallery|louvre|national|gift|bequest|purchased|acquired|작가|작품|소장|미술관|박물관|French|Italian|Spanish|Dutch|German|British|American|medium|dimensions|credit)/i;
 
-  const possibleTitleLines = lines.filter((line) => {
-    if (line.length < 3) return false;
-    if (line.length > 90) return false;
-    if (artist && line.toLowerCase().includes(artist.toLowerCase())) return false;
-    if (metadataWords.test(line)) return false;
-    if (!/[A-Za-z가-힣]/.test(line)) return false;
-    return true;
-  });
+  let title = "";
 
-  let title = cleanField(possibleTitleLines[0] || "");
+  const possibleTitleLine =
+    lines.find((line) => {
+      if (line.length < 3) return false;
+      if (line.length > 90) return false;
+      if (artist && line.toLowerCase().includes(artist.toLowerCase())) {
+        return false;
+      }
+      if (metadataWords.test(line)) return false;
+      if (!/[A-Za-z가-힣]/.test(line)) return false;
+      return true;
+    }) || "";
 
-  if (!title) {
-    const knownTitlePattern =
-      /(Bacchus\s+and\s+Ariadne|La\s+Grande\s+Odalisque|Water\s+Lilies|Red\s+Boats,?\s+Argenteuil|Starry\s+Night|Mona\s+Lisa|The\s+Kiss|The\s+Birth\s+of\s+Venus|Girl\s+with\s+a\s+Pearl\s+Earring)/i;
-
-    const knownTitle = flat.match(knownTitlePattern)?.[1] || "";
-    title = cleanField(knownTitle);
-  }
+  title = cleanField(possibleTitleLine);
 
   if (!title) {
     const beforeYear = flat.match(
-      /([A-Z][A-Za-zÀ-ÿ'’\-]+(?:\s+[A-Za-zÀ-ÿ'’\-]+){0,6}),?\s*(?:1[4-9]\d{2}|20\d{2})/
+      /([A-Z][A-Za-zÀ-ÿ'’\-]+(?:\s+[A-Za-zÀ-ÿ'’\-]+){0,7}),?\s*(?:1[4-9]\d{2}|20\d{2})/
     )?.[1];
 
     title = cleanField(beforeYear || "");
@@ -156,7 +139,7 @@ function extractCandidatesFromOcr(ocrText) {
   };
 }
 
-function weakFallback(ocrText) {
+function emptyResultFromOcr(ocrText) {
   const c = extractCandidatesFromOcr(ocrText);
 
   return {
@@ -173,6 +156,72 @@ function weakFallback(ocrText) {
     answer: "",
     confidence: "낮음",
   };
+}
+
+function buildPrompt({ safeOcrText, candidates, userProfile, question }) {
+  const isQuestionMode = Boolean(question && question.trim());
+
+  return `
+너는 미술관 현장에서 작품을 해설하는 전문 도슨트이자 미술사 해설가다.
+
+아래 텍스트는 사용자가 작품 캡션을 카메라 OCR로 인식한 결과다.
+OCR에는 오타, 누락, 줄바꿈 오류, 외국어 혼합이 있을 수 있다.
+
+[OCR 원문]
+"""
+${safeOcrText}
+"""
+
+[OCR에서 1차 추정한 후보]
+- 작품명 후보: ${candidates.title || ""}
+- 작가명 후보: ${candidates.artist || ""}
+- 제작연도 후보: ${candidates.year || ""}
+- 소장처 후보: ${candidates.museum || ""}
+
+[사용자 정보]
+- 지식 수준: ${userProfile?.level || "미술 입문자"}
+- 선호 취향: ${userProfile?.taste || "쉽고 감성적인 설명"}
+- 연령대: ${userProfile?.age || "20-30대"}
+
+[사용자 질문]
+${question || "없음"}
+
+가장 중요한 목표:
+OCR 원문과 후보 정보를 바탕으로 실제 작품을 추정하고, 그 작품 자체에 대한 구체적인 해설을 작성해라.
+
+절대 금지:
+1. OCR 원문을 그대로 본문에 복붙하지 마라.
+2. “카메라가 인식한 캡션에는…”으로 시작하지 마라.
+3. “작품명은 보통…”, “화면에서 중심 대상을 보세요…” 같은 일반론을 쓰지 마라.
+4. 아무 작품에나 붙일 수 있는 추상적인 해설을 쓰지 마라.
+5. “확인 필요”, “미상”, “unknown”, “정보 없음” 같은 표현을 쓰지 마라.
+6. 마크다운, 코드블록, JSON 외 설명문을 출력하지 마라.
+
+반드시 해야 할 일:
+1. OCR에 보이는 작가명, 작품명, 제작연도, 소장처를 최대한 보정해라.
+2. OCR이 틀렸어도 유명 작가명/작품명 일부가 보이면 미술사 지식으로 자연스럽게 보정해라.
+3. 해설은 반드시 해당 작품의 주제, 장면, 등장인물/대상, 구도, 색채, 미술사적 의미를 포함해야 한다.
+4. 작가 설명은 반드시 해당 작가의 실제 미술사적 특징을 설명해야 한다.
+5. 작가의 의도는 반드시 그 작품에서 작가가 무엇을 보여주려 했는지 설명해야 한다.
+6. 배경 설명은 반드시 그 작품의 제작 맥락, 시대적 흐름, 주제의 배경을 설명해야 한다.
+7. 모르는 필드는 빈 문자열 ""로 둬라. 단, 해설 본문은 빈 값으로 두지 말고 가능한 범위에서 작품별로 작성해라.
+
+출력 JSON 형식:
+{
+  "title": "작품명",
+  "artist": "작가명",
+  "year": "제작연도 또는 빈 문자열",
+  "museum": "소장처 또는 빈 문자열",
+  "summary": "해당 작품의 핵심을 한 문장으로 요약",
+  "simpleExplanation": "해당 작품 자체에 대한 구체적인 작품 해설. 최소 7문장",
+  "artistDescription": "해당 작가에 대한 구체적인 설명. 최소 4문장",
+  "artistIntention": "해당 작품에서의 작가 의도. 최소 4문장",
+  "background": "작품의 제작 배경, 시대적 배경, 주제 배경. 최소 4문장",
+  "viewingPoints": ["해당 작품 감상 포인트 1", "해당 작품 감상 포인트 2", "해당 작품 감상 포인트 3", "해당 작품 감상 포인트 4"],
+  "answer": "${isQuestionMode ? "사용자 질문에 대한 직접 답변" : ""}",
+  "confidence": "높음/보통/낮음"
+}
+`;
 }
 
 async function callOpenRouter({ apiKey, prompt, model }) {
@@ -192,7 +241,7 @@ async function callOpenRouter({ apiKey, prompt, model }) {
           content: prompt,
         },
       ],
-      temperature: 0.1,
+      temperature: 0.08,
       max_tokens: 2200,
     }),
   });
@@ -225,102 +274,52 @@ export async function POST(request) {
         : "museum artwork caption";
 
     const candidates = extractCandidatesFromOcr(safeOcrText);
-    const isQuestionMode = Boolean(question && question.trim());
 
     if (!apiKey) {
-      return Response.json(weakFallback(safeOcrText));
+      return Response.json(emptyResultFromOcr(safeOcrText));
     }
 
-    const prompt = `
-너는 미술관 현장에서 활동하는 전문 도슨트이자 미술사 해설가다.
+    const prompt = buildPrompt({
+      safeOcrText,
+      candidates,
+      userProfile,
+      question,
+    });
 
-아래 텍스트는 사용자가 작품 캡션을 카메라 OCR로 인식한 결과다.
-OCR에는 오타, 누락, 줄바꿈 오류, 불완전한 문장이 있을 수 있다.
+    const models = [
+      "z-ai/glm-4.5-air:free",
+      "qwen/qwen3-235b-a22b:free",
+      "openrouter/free",
+    ];
 
-[OCR 원문]
-"""
-${safeOcrText}
-"""
+    let parsed = null;
 
-[OCR에서 추정한 후보]
-- 작품명 후보: ${candidates.title || ""}
-- 작가명 후보: ${candidates.artist || ""}
-- 제작연도 후보: ${candidates.year || ""}
-- 소장처 후보: ${candidates.museum || ""}
+    for (const model of models) {
+      try {
+        const raw = await callOpenRouter({
+          apiKey,
+          prompt,
+          model,
+        });
 
-[사용자 정보]
-- 지식 수준: ${userProfile?.level || "미술 입문자"}
-- 선호 취향: ${userProfile?.taste || "쉽고 감성적인 설명"}
-- 연령대: ${userProfile?.age || "20-30대"}
+        parsed = extractJson(raw);
 
-[사용자 질문]
-${question || "없음"}
-
-절대 규칙:
-1. OCR 원문을 그대로 요약하지 마라.
-2. "카메라가 인식한 캡션에는..." 같은 문장으로 시작하지 마라.
-3. 일반적인 감상법만 말하지 마라.
-4. 반드시 OCR에서 추정되는 작품명과 작가명을 기준으로, 그 작품 자체를 해설해라.
-5. OCR에 Titian 또는 Tiziano가 있고 Bacchus 또는 Ariadne이 있으면, 반드시 Titian의 「Bacchus and Ariadne」로 판단해라.
-6. OCR에 Ingres 또는 Odalisque가 있으면, 반드시 Jean-Auguste-Dominique Ingres의 「La Grande Odalisque」로 판단해라.
-7. OCR에 Monet과 Water Lilies 또는 Nymphéas가 있으면, 반드시 Claude Monet의 「Water Lilies」로 판단해라.
-8. 위 예시는 하드코딩용이 아니라 OCR 오타 보정 규칙이다. 다른 작품도 같은 방식으로 판단해라.
-9. "확인 필요", "미상", "unknown", "정보 없음" 같은 표현은 절대 쓰지 마라.
-10. 모르는 필드는 빈 문자열 ""로 둬라.
-11. 반드시 JSON만 출력해라. 마크다운, 코드블록, 해설 외 문장은 출력하지 마라.
-
-해설 품질 기준:
-- simpleExplanation은 최소 7문장.
-- 작품의 주제, 등장인물/대상, 장면, 구도, 색채, 미술사적 의미를 구체적으로 설명해라.
-- artistDescription은 최소 4문장. 해당 작가의 실제 미술사적 특징을 설명해라.
-- artistIntention은 최소 4문장. 이 작품에서 작가가 무엇을 보여주려 했는지 설명해라.
-- background는 최소 4문장. 제작 시기, 주문/전시 맥락, 신화/역사/사회적 배경을 설명해라.
-- viewingPoints는 작품을 실제로 볼 때 집중할 포인트 4개를 구체적으로 작성해라.
-
-만약 Titian의 Bacchus and Ariadne이라면:
-- 바쿠스가 전차에서 뛰어내려 아리아드네에게 다가가는 순간
-- 테세우스에게 버림받은 아리아드네
-- 하늘의 별자리/관, 신화적 구원과 사랑
-- 베네치아 회화의 색채와 역동성
-이 내용을 반드시 포함해라.
-
-출력 JSON:
-{
-  "title": "작품명",
-  "artist": "작가명",
-  "year": "제작연도 또는 빈 문자열",
-  "museum": "소장처 또는 빈 문자열",
-  "summary": "작품 한 문장 요약",
-  "simpleExplanation": "해당 작품 자체에 대한 구체적 작품 해설",
-  "artistDescription": "해당 작가에 대한 구체적 설명",
-  "artistIntention": "해당 작품에서의 작가 의도",
-  "background": "작품 배경 설명",
-  "viewingPoints": ["감상 포인트 1", "감상 포인트 2", "감상 포인트 3", "감상 포인트 4"],
-  "answer": "${isQuestionMode ? "사용자 질문에 대한 직접 답변" : ""}",
-  "confidence": "높음/보통/낮음"
-}
-`;
-
-    let raw = "";
-
-    try {
-      raw = await callOpenRouter({
-        apiKey,
-        prompt,
-        model: "z-ai/glm-4.5-air:free",
-      });
-    } catch {
-      raw = await callOpenRouter({
-        apiKey,
-        prompt,
-        model: "openrouter/free",
-      });
+        if (
+          parsed &&
+          (parsed.simpleExplanation ||
+            parsed.artistDescription ||
+            parsed.artistIntention ||
+            parsed.background)
+        ) {
+          break;
+        }
+      } catch (error) {
+        console.error(error);
+      }
     }
-
-    const parsed = extractJson(raw);
 
     if (!parsed) {
-      return Response.json(weakFallback(safeOcrText));
+      return Response.json(emptyResultFromOcr(safeOcrText));
     }
 
     const cleaned = {
@@ -329,7 +328,9 @@ ${question || "없음"}
       year: cleanField(parsed.year),
       museum: cleanField(parsed.museum),
       summary: cleanField(parsed.summary),
-      simpleExplanation: cleanField(parsed.simpleExplanation || parsed.explanation),
+      simpleExplanation: cleanField(
+        parsed.simpleExplanation || parsed.explanation
+      ),
       artistDescription: cleanField(parsed.artistDescription),
       artistIntention: cleanField(parsed.artistIntention),
       background: cleanField(parsed.background),
@@ -354,20 +355,6 @@ ${question || "없음"}
     });
   } catch (error) {
     console.error(error);
-
-    return Response.json({
-      title: "",
-      artist: "",
-      year: "",
-      museum: "",
-      summary: "",
-      simpleExplanation: "",
-      artistDescription: "",
-      artistIntention: "",
-      background: "",
-      viewingPoints: [],
-      answer: "",
-      confidence: "낮음",
-    });
+    return Response.json(emptyResultFromOcr(""));
   }
 }
