@@ -28,6 +28,8 @@ export default function Home() {
   const [manualArtist, setManualArtist] = useState("");
   const [correctionLoading, setCorrectionLoading] = useState(false);
 
+  const [artworkConfirmed, setArtworkConfirmed] = useState(false);
+
   const userProfile = {
     level: "미술 입문자",
     taste: "감성적·스토리 중심 설명 선호",
@@ -46,6 +48,7 @@ export default function Home() {
     try {
       setQuestionOpen(false);
       setCorrectionOpen(false);
+      setArtworkConfirmed(false);
 
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         alert("이 브라우저에서는 카메라 기능을 사용할 수 없습니다.");
@@ -87,6 +90,7 @@ export default function Home() {
 
     setQuestionOpen(false);
     setCorrectionOpen(false);
+    setArtworkConfirmed(false);
     setMode("camera");
 
     setOcrLoading(true);
@@ -150,7 +154,7 @@ export default function Home() {
       setChat([
         {
           role: "ai",
-          text: `OCR 캡션을 바탕으로 「${data.title}」 작품 정보를 분석했어요. 분석 신뢰도는 ${data.confidence}입니다. 작품에 대해 궁금한 점을 아래에서 질문할 수 있어요.`,
+          text: `OCR 캡션을 바탕으로 「${data.title}」 작품 정보를 분석했어요. 작품에 대해 궁금한 점을 질문할 수 있어요.`,
         },
       ]);
 
@@ -175,7 +179,6 @@ export default function Home() {
 
   const regenerateWithCorrection = async () => {
     if (!manualTitle.trim() && !manualArtist.trim()) {
-      alert("작품명 또는 작가명 중 하나 이상을 입력해주세요.");
       return;
     }
 
@@ -211,12 +214,13 @@ export default function Home() {
       setChat([
         {
           role: "ai",
-          text: `사용자가 입력한 작품 정보를 바탕으로 「${data.title}」 작품 해설을 다시 생성했어요. 이제 이 작품에 대해 궁금한 점을 질문할 수 있어요.`,
+          text: `사용자가 입력한 작품 정보를 바탕으로 「${data.title}」 작품 해설을 다시 생성했어요.`,
         },
       ]);
 
       setCorrectionOpen(false);
       setQuestionOpen(false);
+      setArtworkConfirmed(true);
       setManualTitle("");
       setManualArtist("");
       setScreen("explain");
@@ -232,12 +236,10 @@ export default function Home() {
     const trimmedQuestion = question.trim();
 
     if (!trimmedQuestion) {
-      alert("질문을 입력해주세요.");
       return;
     }
 
     if (!artwork && !ocrText) {
-      alert("먼저 작품 캡션을 인식하거나 작품 정보를 입력해주세요.");
       return;
     }
 
@@ -327,19 +329,16 @@ export default function Home() {
           )}
 
           <div className="top-bar">
-            <button className="icon-btn">‹</button>
+            <button className="icon-btn" type="button">
+              ‹
+            </button>
 
             <div className="app-pill">
               <span className="app-dot" />
               Clartity
             </div>
 
-            <button
-              className="icon-btn"
-              onClick={() => {
-                alert("작품 캡션을 촬영하면 AI 해설과 질문 기능을 사용할 수 있습니다.");
-              }}
-            >
+            <button className="icon-btn" type="button">
               ?
             </button>
           </div>
@@ -367,7 +366,9 @@ export default function Home() {
           </div>
 
           <div className="camera-controls">
-            <button className="round-control">▧</button>
+            <button className="round-control" type="button">
+              ▧
+            </button>
 
             <button
               className="shutter"
@@ -378,7 +379,9 @@ export default function Home() {
               <span />
             </button>
 
-            <button className="round-control">⌁</button>
+            <button className="round-control" type="button">
+              ⌁
+            </button>
           </div>
 
           <nav className="bottom-tabs">
@@ -411,7 +414,7 @@ export default function Home() {
               className={mode === "chat" ? "active" : ""}
               onClick={() => {
                 setMode("chat");
-                setQuestionOpen(true);
+                setQuestionOpen(false);
               }}
             >
               <span>👥</span>
@@ -456,6 +459,7 @@ export default function Home() {
             <button
               type="button"
               onClick={() => {
+                setCorrectionOpen(false);
                 setQuestionOpen(true);
               }}
             >
@@ -463,26 +467,90 @@ export default function Home() {
             </button>
           </header>
 
-          <button
-            type="button"
-            className="wrong-artwork-button"
-            onClick={() => {
-              setQuestionOpen(false);
-              setManualTitle(
-                artwork.title && !artwork.title.includes("명확하지")
-                  ? artwork.title
-                  : ""
-              );
-              setManualArtist(
-                artwork.artist && !artwork.artist.includes("명확하지")
-                  ? artwork.artist
-                  : ""
-              );
-              setCorrectionOpen(true);
-            }}
-          >
-            이 작품이 아닌가요? 직접 수정하기
-          </button>
+          <section className="confirm-card">
+            <div>
+              <h3>이 작품이 맞나요?</h3>
+              <p>
+                AI가 캡션을 잘못 읽었을 수 있어요. 작품 정보가 다르면 직접
+                수정해서 해설을 다시 볼 수 있습니다.
+              </p>
+            </div>
+
+            <div className="confirm-actions">
+              <button
+                type="button"
+                className={artworkConfirmed ? "confirm-btn active" : "confirm-btn"}
+                onClick={() => {
+                  setArtworkConfirmed(true);
+                  setCorrectionOpen(false);
+                }}
+              >
+                {artworkConfirmed ? "확인 완료" : "맞아요"}
+              </button>
+
+              <button
+                type="button"
+                className="edit-artwork-btn"
+                onClick={() => {
+                  setQuestionOpen(false);
+                  setArtworkConfirmed(false);
+                  setManualTitle(
+                    artwork.title && !artwork.title.includes("명확하지")
+                      ? artwork.title
+                      : ""
+                  );
+                  setManualArtist(
+                    artwork.artist && !artwork.artist.includes("명확하지")
+                      ? artwork.artist
+                      : ""
+                  );
+                  setCorrectionOpen((prev) => !prev);
+                }}
+              >
+                아니요, 직접 입력할래요
+              </button>
+            </div>
+          </section>
+
+          {correctionOpen && (
+            <section className="inline-correction-card">
+              <div className="section-title">작품 정보 직접 입력</div>
+
+              <div className="inline-correction-form">
+                <label>
+                  작품명
+                  <input
+                    value={manualTitle}
+                    onChange={(e) => setManualTitle(e.target.value)}
+                    placeholder="예: 모나리자"
+                  />
+                </label>
+
+                <label>
+                  작가명
+                  <input
+                    value={manualArtist}
+                    onChange={(e) => setManualArtist(e.target.value)}
+                    placeholder="예: 레오나르도 다빈치"
+                  />
+                </label>
+              </div>
+
+              <button
+                type="button"
+                className="submit-inline-correction"
+                onClick={regenerateWithCorrection}
+                disabled={
+                  correctionLoading ||
+                  (!manualTitle.trim() && !manualArtist.trim())
+                }
+              >
+                {correctionLoading
+                  ? "해설 다시 생성 중..."
+                  : "이 정보로 다시 해설 보기"}
+              </button>
+            </section>
+          )}
 
           <section className="artwork-hero">
             <div className="badge">✨ 분석 신뢰도 {artwork.confidence}</div>
@@ -596,67 +664,6 @@ export default function Home() {
         </section>
       )}
 
-      {correctionOpen && (
-        <div className="correction-overlay">
-          <div className="correction-modal">
-            <div className="correction-header">
-              <div>
-                <h3>작품 정보 직접 입력</h3>
-                <p>
-                  AI가 작품을 잘못 인식했다면 작품명과 작가명을 직접
-                  입력해주세요. 입력한 정보를 기준으로 해설을 다시 생성합니다.
-                </p>
-              </div>
-
-              <button type="button" onClick={() => setCorrectionOpen(false)}>
-                ×
-              </button>
-            </div>
-
-            <div className="correction-form">
-              <label>
-                작품명
-                <input
-                  value={manualTitle}
-                  onChange={(e) => setManualTitle(e.target.value)}
-                  placeholder="예: 모나리자"
-                />
-              </label>
-
-              <label>
-                작가명
-                <input
-                  value={manualArtist}
-                  onChange={(e) => setManualArtist(e.target.value)}
-                  placeholder="예: 레오나르도 다빈치"
-                />
-              </label>
-            </div>
-
-            <div className="correction-actions">
-              <button
-                type="button"
-                className="cancel-correction"
-                onClick={() => setCorrectionOpen(false)}
-              >
-                취소
-              </button>
-
-              <button
-                type="button"
-                className="submit-correction"
-                onClick={regenerateWithCorrection}
-                disabled={correctionLoading}
-              >
-                {correctionLoading
-                  ? "해설 다시 생성 중..."
-                  : "이 정보로 다시 해설 보기"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {questionOpen && (
         <div className="chat-sheet">
           <div className="sheet-handle" />
@@ -674,8 +681,7 @@ export default function Home() {
           <div className="chat-list">
             {chat.length === 0 && (
               <div className="bubble ai">
-                먼저 작품 캡션을 촬영하거나 작품 정보를 입력하면 해당 작품에
-                대해 질문할 수 있어요.
+                작품에 대해 궁금한 점을 입력하면 AI가 답변해드립니다.
               </div>
             )}
 
@@ -697,13 +703,15 @@ export default function Home() {
               placeholder="예: 이 작품은 왜 유명해?"
               disabled={questionLoading}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !questionLoading) askQuestion();
+                if (e.key === "Enter" && !questionLoading && question.trim()) {
+                  askQuestion();
+                }
               }}
             />
             <button
               type="button"
               onClick={askQuestion}
-              disabled={questionLoading}
+              disabled={questionLoading || !question.trim()}
             >
               {questionLoading ? "…" : "↑"}
             </button>
@@ -730,7 +738,7 @@ export default function Home() {
 
         button:disabled {
           cursor: not-allowed;
-          opacity: 0.65;
+          opacity: 0.55;
         }
 
         .app {
@@ -1054,20 +1062,104 @@ export default function Home() {
           font-size: 10px;
           color: #8c89a0;
           letter-spacing: 0.1em;
-          text-transform: uppercase;
         }
 
-        .wrong-artwork-button {
-          width: 100%;
-          margin-bottom: 16px;
-          border: 1px solid #e8e0ff;
-          border-radius: 18px;
-          padding: 14px 16px;
-          background: rgba(255, 255, 255, 0.92);
-          color: #7254e8;
-          font-size: 15px;
+        .confirm-card,
+        .inline-correction-card,
+        .detected-info-box,
+        .explain-card {
+          margin-top: 18px;
+          padding: 20px;
+          border-radius: 28px;
+          background: rgba(255, 255, 255, 0.94);
+          border: 1px solid #eeeaf4;
+          box-shadow: 0 14px 35px rgba(40, 35, 80, 0.07);
+        }
+
+        .confirm-card {
+          margin-top: 0;
+          margin-bottom: 18px;
+        }
+
+        .confirm-card h3 {
+          margin: 0;
+          font-size: 21px;
           font-weight: 900;
-          box-shadow: 0 10px 26px rgba(45, 35, 90, 0.08);
+          letter-spacing: -0.04em;
+        }
+
+        .confirm-card p {
+          margin: 8px 0 0;
+          color: #777184;
+          font-size: 14px;
+          line-height: 1.55;
+        }
+
+        .confirm-actions {
+          display: grid;
+          grid-template-columns: 0.8fr 1.4fr;
+          gap: 10px;
+          margin-top: 16px;
+        }
+
+        .confirm-btn,
+        .edit-artwork-btn,
+        .submit-inline-correction {
+          border: none;
+          border-radius: 18px;
+          padding: 15px 12px;
+          font-size: 14px;
+          font-weight: 900;
+        }
+
+        .confirm-btn {
+          background: #f0eaff;
+          color: #7254e8;
+        }
+
+        .confirm-btn.active {
+          background: #e6fff7;
+          color: #168466;
+        }
+
+        .edit-artwork-btn,
+        .submit-inline-correction {
+          background: linear-gradient(135deg, #7357ff, #bd43ff);
+          color: #fff;
+        }
+
+        .inline-correction-card {
+          margin-top: 0;
+          margin-bottom: 18px;
+        }
+
+        .inline-correction-form {
+          display: grid;
+          gap: 14px;
+        }
+
+        .inline-correction-form label {
+          display: grid;
+          gap: 8px;
+          color: #444153;
+          font-size: 14px;
+          font-weight: 900;
+        }
+
+        .inline-correction-form input {
+          width: 100%;
+          border: 1px solid #e7e4ef;
+          border-radius: 17px;
+          padding: 14px;
+          outline: none;
+          color: #171729;
+          background: #fbfaff;
+          font-size: 15px;
+        }
+
+        .submit-inline-correction {
+          width: 100%;
+          margin-top: 16px;
         }
 
         .artwork-hero {
@@ -1108,16 +1200,6 @@ export default function Home() {
           line-height: 1.55;
           font-weight: 800;
           letter-spacing: -0.04em;
-        }
-
-        .detected-info-box,
-        .explain-card {
-          margin-top: 18px;
-          padding: 20px;
-          border-radius: 28px;
-          background: rgba(255, 255, 255, 0.94);
-          border: 1px solid #eeeaf4;
-          box-shadow: 0 14px 35px rgba(40, 35, 80, 0.07);
         }
 
         .section-title {
@@ -1222,116 +1304,6 @@ export default function Home() {
         }
 
         .primary-action {
-          background: linear-gradient(135deg, #7357ff, #bd43ff);
-          color: #fff;
-        }
-
-        .correction-overlay {
-          position: fixed;
-          z-index: 50;
-          inset: 0;
-          background: rgba(0, 0, 0, 0.42);
-          backdrop-filter: blur(8px);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          padding: 22px;
-        }
-
-        .correction-modal {
-          width: 100%;
-          max-width: 390px;
-          border-radius: 30px;
-          background: #ffffff;
-          color: #171729;
-          padding: 22px;
-          box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
-        }
-
-        .correction-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
-          gap: 12px;
-        }
-
-        .correction-header h3 {
-          margin: 0;
-          font-size: 22px;
-          font-weight: 900;
-          letter-spacing: -0.04em;
-        }
-
-        .correction-header p {
-          margin: 8px 0 0;
-          color: #777184;
-          font-size: 13px;
-          line-height: 1.55;
-        }
-
-        .correction-header button {
-          width: 36px;
-          height: 36px;
-          border: none;
-          border-radius: 999px;
-          background: #f1eff7;
-          color: #171729;
-          font-size: 22px;
-          flex-shrink: 0;
-        }
-
-        .correction-form {
-          display: grid;
-          gap: 14px;
-          margin-top: 22px;
-        }
-
-        .correction-form label {
-          display: grid;
-          gap: 8px;
-          color: #444153;
-          font-size: 14px;
-          font-weight: 900;
-        }
-
-        .correction-form input {
-          width: 100%;
-          border: 1px solid #e7e4ef;
-          border-radius: 17px;
-          padding: 14px;
-          outline: none;
-          color: #171729;
-          background: #fbfaff;
-          font-size: 15px;
-        }
-
-        .correction-form input:focus {
-          border-color: #8b6cff;
-          box-shadow: 0 0 0 3px rgba(139, 108, 255, 0.12);
-        }
-
-        .correction-actions {
-          display: grid;
-          grid-template-columns: 0.8fr 1.4fr;
-          gap: 10px;
-          margin-top: 22px;
-        }
-
-        .cancel-correction,
-        .submit-correction {
-          border: none;
-          border-radius: 18px;
-          padding: 15px 12px;
-          font-size: 14px;
-          font-weight: 900;
-        }
-
-        .cancel-correction {
-          background: #f3f1fb;
-          color: #555166;
-        }
-
-        .submit-correction {
           background: linear-gradient(135deg, #7357ff, #bd43ff);
           color: #fff;
         }
@@ -1465,15 +1437,6 @@ export default function Home() {
             transform: translateX(-50%);
             bottom: 24px;
             border-radius: 30px;
-          }
-
-          .correction-overlay {
-            left: 50%;
-            right: auto;
-            width: 430px;
-            transform: translateX(-50%);
-            margin: 24px auto;
-            border-radius: 42px;
           }
 
           body {
