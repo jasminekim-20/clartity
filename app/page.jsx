@@ -14,6 +14,7 @@ export default function Home() {
   const [cameraOn, setCameraOn] = useState(false);
   const [ocrLoading, setOcrLoading] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
+  const [questionLoading, setQuestionLoading] = useState(false);
 
   const [ocrText, setOcrText] = useState("");
   const [artwork, setArtwork] = useState(null);
@@ -43,6 +44,9 @@ export default function Home() {
 
   const startCamera = async () => {
     try {
+      setQuestionOpen(false);
+      setCorrectionOpen(false);
+
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         alert("이 브라우저에서는 카메라 기능을 사용할 수 없습니다.");
         return;
@@ -80,6 +84,10 @@ export default function Home() {
 
   const captureAndOCR = async () => {
     if (!videoRef.current || !canvasRef.current) return;
+
+    setQuestionOpen(false);
+    setCorrectionOpen(false);
+    setMode("camera");
 
     setOcrLoading(true);
     setAiLoading(false);
@@ -142,10 +150,12 @@ export default function Home() {
       setChat([
         {
           role: "ai",
-          text: `OCR 캡션을 바탕으로 「${data.title}」 작품 정보를 분석했어요. 분석 신뢰도는 ${data.confidence}입니다.`,
+          text: `OCR 캡션을 바탕으로 「${data.title}」 작품 정보를 분석했어요. 분석 신뢰도는 ${data.confidence}입니다. 작품에 대해 궁금한 점을 아래에서 질문할 수 있어요.`,
         },
       ]);
 
+      setQuestionOpen(false);
+      setCorrectionOpen(false);
       setScreen("explain");
     } catch (error) {
       console.error(error);
@@ -170,6 +180,7 @@ export default function Home() {
     }
 
     setCorrectionLoading(true);
+    setQuestionOpen(false);
 
     try {
       const response = await fetch("/api/explain", {
@@ -200,11 +211,12 @@ export default function Home() {
       setChat([
         {
           role: "ai",
-          text: `사용자가 입력한 작품 정보를 바탕으로 「${data.title}」 작품 해설을 다시 생성했어요. 분석 신뢰도는 ${data.confidence}입니다.`,
+          text: `사용자가 입력한 작품 정보를 바탕으로 「${data.title}」 작품 해설을 다시 생성했어요. 이제 이 작품에 대해 궁금한 점을 질문할 수 있어요.`,
         },
       ]);
 
       setCorrectionOpen(false);
+      setQuestionOpen(false);
       setManualTitle("");
       setManualArtist("");
       setScreen("explain");
@@ -217,14 +229,19 @@ export default function Home() {
   };
 
   const askQuestion = async () => {
-    if (!question.trim()) return;
+    const trimmedQuestion = question.trim();
 
-    if (!ocrText && !artwork) {
+    if (!trimmedQuestion) {
+      alert("질문을 입력해주세요.");
+      return;
+    }
+
+    if (!artwork && !ocrText) {
       alert("먼저 작품 캡션을 인식하거나 작품 정보를 입력해주세요.");
       return;
     }
 
-    const userQuestion = question.trim();
+    const userQuestion = trimmedQuestion;
 
     setChat((prev) => [
       ...prev,
@@ -235,6 +252,7 @@ export default function Home() {
     ]);
 
     setQuestion("");
+    setQuestionLoading(true);
 
     try {
       const response = await fetch("/api/explain", {
@@ -266,9 +284,8 @@ export default function Home() {
           text:
             data.answer ||
             data.simpleExplanation ||
-            data.explanation ||
             data.summary ||
-            "이 작품에 대한 추가 설명을 생성했습니다.",
+            "이 작품에 대한 답변을 생성했습니다.",
         },
       ]);
     } catch (error) {
@@ -278,9 +295,13 @@ export default function Home() {
         ...prev,
         {
           role: "ai",
-          text: "질문에 답변하는 중 오류가 발생했습니다.",
+          text:
+            error.message ||
+            "질문에 답변하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
         },
       ]);
+    } finally {
+      setQuestionLoading(false);
     }
   };
 
@@ -313,7 +334,14 @@ export default function Home() {
               Clartity
             </div>
 
-            <button className="icon-btn">?</button>
+            <button
+              className="icon-btn"
+              onClick={() => {
+                alert("작품 캡션을 촬영하면 AI 해설과 질문 기능을 사용할 수 있습니다.");
+              }}
+            >
+              ?
+            </button>
           </div>
 
           <div className="scan-guide">
@@ -341,7 +369,12 @@ export default function Home() {
           <div className="camera-controls">
             <button className="round-control">▧</button>
 
-            <button className="shutter" onClick={captureAndOCR}>
+            <button
+              className="shutter"
+              type="button"
+              onClick={captureAndOCR}
+              disabled={ocrLoading || aiLoading}
+            >
               <span />
             </button>
 
@@ -350,22 +383,31 @@ export default function Home() {
 
           <nav className="bottom-tabs">
             <button
+              type="button"
               className={mode === "translate" ? "active" : ""}
-              onClick={() => setMode("translate")}
+              onClick={() => {
+                setMode("translate");
+                setQuestionOpen(false);
+              }}
             >
               <span>▣</span>
               번역
             </button>
 
             <button
+              type="button"
               className={mode === "camera" ? "active" : ""}
-              onClick={() => setMode("camera")}
+              onClick={() => {
+                setMode("camera");
+                setQuestionOpen(false);
+              }}
             >
               <span>●</span>
               카메라
             </button>
 
             <button
+              type="button"
               className={mode === "chat" ? "active" : ""}
               onClick={() => {
                 setMode("chat");
@@ -377,8 +419,12 @@ export default function Home() {
             </button>
 
             <button
+              type="button"
               className={mode === "save" ? "active" : ""}
-              onClick={() => setMode("save")}
+              onClick={() => {
+                setMode("save");
+                setQuestionOpen(false);
+              }}
             >
               <span>★</span>
               저장
@@ -391,7 +437,10 @@ export default function Home() {
         <section className="explain-screen">
           <header className="explain-header">
             <button
+              type="button"
               onClick={() => {
+                setQuestionOpen(false);
+                setCorrectionOpen(false);
                 setScreen("camera");
                 setTimeout(() => startCamera(), 300);
               }}
@@ -404,12 +453,21 @@ export default function Home() {
               <div className="explain-sub-mini">캡션 기반 맞춤 해설</div>
             </div>
 
-            <button onClick={() => setQuestionOpen(true)}>?</button>
+            <button
+              type="button"
+              onClick={() => {
+                setQuestionOpen(true);
+              }}
+            >
+              ?
+            </button>
           </header>
 
           <button
+            type="button"
             className="wrong-artwork-button"
             onClick={() => {
+              setQuestionOpen(false);
               setManualTitle(
                 artwork.title && !artwork.title.includes("명확하지")
                   ? artwork.title
@@ -522,12 +580,18 @@ export default function Home() {
 
           <div className="bottom-action-area">
             <button
+              type="button"
               className="ghost-action"
-              onClick={() => setQuestionOpen(true)}
+              onClick={() => {
+                setCorrectionOpen(false);
+                setQuestionOpen(true);
+              }}
             >
               AI에게 질문
             </button>
-            <button className="primary-action">기록에 저장</button>
+            <button type="button" className="primary-action">
+              기록에 저장
+            </button>
           </div>
         </section>
       )}
@@ -544,7 +608,9 @@ export default function Home() {
                 </p>
               </div>
 
-              <button onClick={() => setCorrectionOpen(false)}>×</button>
+              <button type="button" onClick={() => setCorrectionOpen(false)}>
+                ×
+              </button>
             </div>
 
             <div className="correction-form">
@@ -569,6 +635,7 @@ export default function Home() {
 
             <div className="correction-actions">
               <button
+                type="button"
                 className="cancel-correction"
                 onClick={() => setCorrectionOpen(false)}
               >
@@ -576,6 +643,7 @@ export default function Home() {
               </button>
 
               <button
+                type="button"
                 className="submit-correction"
                 onClick={regenerateWithCorrection}
                 disabled={correctionLoading}
@@ -598,7 +666,9 @@ export default function Home() {
               <h3>작품에 대해 질문하기</h3>
               <p>인식된 캡션 또는 수정된 작품 정보를 바탕으로 답변합니다.</p>
             </div>
-            <button onClick={() => setQuestionOpen(false)}>×</button>
+            <button type="button" onClick={() => setQuestionOpen(false)}>
+              ×
+            </button>
           </div>
 
           <div className="chat-list">
@@ -614,6 +684,10 @@ export default function Home() {
                 {m.text}
               </div>
             ))}
+
+            {questionLoading && (
+              <div className="bubble ai">AI가 답변을 생성하는 중입니다...</div>
+            )}
           </div>
 
           <div className="question-box">
@@ -621,11 +695,18 @@ export default function Home() {
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
               placeholder="예: 이 작품은 왜 유명해?"
+              disabled={questionLoading}
               onKeyDown={(e) => {
-                if (e.key === "Enter") askQuestion();
+                if (e.key === "Enter" && !questionLoading) askQuestion();
               }}
             />
-            <button onClick={askQuestion}>↑</button>
+            <button
+              type="button"
+              onClick={askQuestion}
+              disabled={questionLoading}
+            >
+              {questionLoading ? "…" : "↑"}
+            </button>
           </div>
         </div>
       )}
@@ -645,6 +726,11 @@ export default function Home() {
         button {
           cursor: pointer;
           font-family: inherit;
+        }
+
+        button:disabled {
+          cursor: not-allowed;
+          opacity: 0.65;
         }
 
         .app {
@@ -1248,11 +1334,6 @@ export default function Home() {
         .submit-correction {
           background: linear-gradient(135deg, #7357ff, #bd43ff);
           color: #fff;
-        }
-
-        .submit-correction:disabled {
-          opacity: 0.65;
-          cursor: not-allowed;
         }
 
         .chat-sheet {
