@@ -24,7 +24,7 @@ function extractJson(text) {
 export async function GET() {
   return Response.json({
     message:
-      "Clartity explain API is running with OpenRouter. Use POST to generate artwork explanation.",
+      "Clartity 작품 해설 API가 정상적으로 실행 중입니다. POST 요청을 보내면 작품 해설을 생성할 수 있습니다.",
   });
 }
 
