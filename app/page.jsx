@@ -7,6 +7,7 @@ export default function Home() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
+  const chatEndRef = useRef(null);
 
   const [screen, setScreen] = useState("camera");
   const [mode, setMode] = useState("camera");
@@ -14,6 +15,7 @@ export default function Home() {
   const [cameraOn, setCameraOn] = useState(false);
   const [ocrLoading, setOcrLoading] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
+  const [chatLoading, setChatLoading] = useState(false);
 
   const [ocrText, setOcrText] = useState("");
   const [artwork, setArtwork] = useState(null);
@@ -21,6 +23,17 @@ export default function Home() {
   const [questionOpen, setQuestionOpen] = useState(false);
   const [question, setQuestion] = useState("");
   const [chat, setChat] = useState([]);
+
+  // 직접 입력 모달
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualTitle, setManualTitle] = useState("");
+  const [manualArtist, setManualArtist] = useState("");
+  const [manualLoading, setManualLoading] = useState(false);
+
+  // explain 화면에서 정보 수정
+  const [editOpen, setEditOpen] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
+  const [editArtist, setEditArtist] = useState("");
 
   const userProfile = {
     level: "미술 입문자",
@@ -30,11 +43,14 @@ export default function Home() {
 
   useEffect(() => {
     startCamera();
-
-    return () => {
-      stopCamera();
-    };
+    return () => stopCamera();
   }, []);
+
+  useEffect(() => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [chat, chatLoading]);
 
   const startCamera = async () => {
     try {
@@ -42,21 +58,15 @@ export default function Home() {
         alert("이 브라우저에서는 카메라 기능을 사용할 수 없습니다.");
         return;
       }
-
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: "environment",
-        },
+        video: { facingMode: "environment" },
         audio: false,
       });
-
       streamRef.current = stream;
-
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
-
       setCameraOn(true);
     } catch (error) {
       console.error(error);
@@ -69,8 +79,25 @@ export default function Home() {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
-
     setCameraOn(false);
+  };
+
+  const fetchArtworkInfo = async (ocrTextInput) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    const response = await fetch("/api/explain", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ocrText: ocrTextInput, userProfile }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "AI 해설 생성에 실패했습니다.");
+    return data;
   };
 
   const captureAndOCR = async () => {
@@ -88,7 +115,6 @@ export default function Home() {
 
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     try {
@@ -99,7 +125,7 @@ export default function Home() {
       const text = result.data.text.trim();
 
       if (!text || text.length < 3) {
-        alert("캡션 글자가 잘 인식되지 않았습니다. 더 가까이 촬영해주세요.");
+        alert("캡션 글자가 잘 인식되지 않았습니다. 더 가까이 촬영하거나 직접 입력해보세요.");
         return;
       }
 
@@ -107,48 +133,20 @@ export default function Home() {
       setOcrLoading(false);
       setAiLoading(true);
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => {
-        controller.abort();
-      }, 30000);
-
-      const response = await fetch("/api/explain", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          ocrText: text,
-          userProfile,
-        }),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "AI 해설 생성에 실패했습니다.");
-      }
+      const data = await fetchArtworkInfo(text);
 
       setArtwork(data);
-
       setChat([
         {
           role: "ai",
-          text: `OCR 캡션을 바탕으로 「${data.title}」 작품 정보를 분석했어요. 분석 신뢰도는 ${data.confidence}입니다.`,
+          text: `OCR 캡션을 바탕으로 「${data.title}」 작품 정보를 분석했어요. 분석 신뢰도는 ${data.confidence}입니다. 궁금한 점이 있으면 질문해보세요!`,
         },
       ]);
-
       setScreen("explain");
     } catch (error) {
       console.error(error);
-
       if (error.name === "AbortError") {
-        alert(
-          "AI 해설 생성 시간이 너무 오래 걸립니다. 잠시 후 다시 시도해주세요."
-        );
+        alert("AI 해설 생성 시간이 너무 오래 걸립니다. 잠시 후 다시 시도해주세요.");
       } else {
         alert(error.message || "OCR 또는 AI 해설 생성 중 오류가 발생했습니다.");
       }
@@ -158,67 +156,126 @@ export default function Home() {
     }
   };
 
+  // 직접 입력으로 해설 생성
+  const submitManual = async () => {
+    if (!manualTitle.trim() && !manualArtist.trim()) {
+      alert("작품명 또는 작가명을 입력해주세요.");
+      return;
+    }
+
+    setManualLoading(true);
+
+    const synthesized = [
+      manualTitle.trim() && `작품명: ${manualTitle.trim()}`,
+      manualArtist.trim() && `작가명: ${manualArtist.trim()}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    try {
+      setAiLoading(true);
+      const data = await fetchArtworkInfo(synthesized);
+
+      setOcrText(synthesized);
+      setArtwork(data);
+      setChat([
+        {
+          role: "ai",
+          text: `「${data.title}」 작품 정보를 분석했어요. 분석 신뢰도는 ${data.confidence}입니다. 궁금한 점이 있으면 질문해보세요!`,
+        },
+      ]);
+      setManualOpen(false);
+      setManualTitle("");
+      setManualArtist("");
+      setScreen("explain");
+    } catch (error) {
+      console.error(error);
+      alert(error.message || "AI 해설 생성 중 오류가 발생했습니다.");
+    } finally {
+      setManualLoading(false);
+      setAiLoading(false);
+    }
+  };
+
+  // explain 화면에서 정보 수정 후 재검색
+  const submitEdit = async () => {
+    if (!editTitle.trim() && !editArtist.trim()) {
+      alert("작품명 또는 작가명을 입력해주세요.");
+      return;
+    }
+
+    setEditOpen(false);
+    setAiLoading(true);
+
+    const synthesized = [
+      editTitle.trim() && `작품명: ${editTitle.trim()}`,
+      editArtist.trim() && `작가명: ${editArtist.trim()}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    try {
+      const data = await fetchArtworkInfo(synthesized);
+
+      setOcrText(synthesized);
+      setArtwork(data);
+      setChat([
+        {
+          role: "ai",
+          text: `「${data.title}」 작품 정보를 다시 분석했어요. 분석 신뢰도는 ${data.confidence}입니다.`,
+        },
+      ]);
+    } catch (error) {
+      console.error(error);
+      alert(error.message || "AI 해설 생성 중 오류가 발생했습니다.");
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   const askQuestion = async () => {
-    if (!question.trim()) return;
+    const trimmed = question.trim();
+    if (!trimmed || chatLoading) return;
 
     if (!ocrText) {
       alert("먼저 작품 캡션을 인식해주세요.");
       return;
     }
 
-    const userQuestion = question.trim();
+    const userMessage = { role: "user", text: trimmed };
+    const nextChat = [...chat, userMessage];
 
-    setChat((prev) => [
-      ...prev,
-      {
-        role: "user",
-        text: userQuestion,
-      },
-    ]);
-
+    setChat(nextChat);
     setQuestion("");
+    setChatLoading(true);
 
     try {
-      const response = await fetch("/api/explain", {
+      const response = await fetch("/api/chat", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ocrText,
           userProfile,
-          question: userQuestion,
+          question: trimmed,
+          chatHistory: nextChat,
         }),
       });
 
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "질문 답변 생성에 실패했습니다.");
-      }
+      if (!response.ok) throw new Error(data.error || "질문 답변 생성에 실패했습니다.");
 
       setChat((prev) => [
         ...prev,
-        {
-          role: "ai",
-          text:
-            data.answer ||
-            data.simpleExplanation ||
-            data.explanation ||
-            data.summary ||
-            "이 작품에 대한 추가 설명을 생성했습니다.",
-        },
+        { role: "ai", text: data.answer || "답변을 생성하지 못했습니다." },
       ]);
     } catch (error) {
       console.error(error);
-
       setChat((prev) => [
         ...prev,
-        {
-          role: "ai",
-          text: "질문에 답변하는 중 오류가 발생했습니다.",
-        },
+        { role: "ai", text: "질문에 답변하는 중 오류가 발생했습니다. 다시 시도해주세요." },
       ]);
+    } finally {
+      setChatLoading(false);
     }
   };
 
@@ -226,14 +283,7 @@ export default function Home() {
     <main className="app">
       {screen === "camera" && (
         <section className="camera-screen">
-          <video
-            ref={videoRef}
-            className="camera-video"
-            playsInline
-            muted
-            autoPlay
-          />
-
+          <video ref={videoRef} className="camera-video" playsInline muted autoPlay />
           <canvas ref={canvasRef} style={{ display: "none" }} />
 
           {!cameraOn && (
@@ -245,12 +295,10 @@ export default function Home() {
 
           <div className="top-bar">
             <button className="icon-btn">‹</button>
-
             <div className="app-pill">
               <span className="app-dot" />
               Clartity
             </div>
-
             <button className="icon-btn">?</button>
           </div>
 
@@ -262,13 +310,8 @@ export default function Home() {
             <div className="guide-text">작품 캡션을 이 영역에 맞춰주세요</div>
           </div>
 
-          {ocrLoading && (
-            <div className="loading-toast">캡션 글자를 읽는 중입니다...</div>
-          )}
-
-          {aiLoading && (
-            <div className="loading-toast">작품 해설을 생성 중입니다...</div>
-          )}
+          {ocrLoading && <div className="loading-toast">캡션 글자를 읽는 중입니다...</div>}
+          {aiLoading && <div className="loading-toast">작품 해설을 생성 중입니다...</div>}
 
           <div className="language-pill">
             캡션 인식 <span>⌄</span>
@@ -278,48 +321,32 @@ export default function Home() {
 
           <div className="camera-controls">
             <button className="round-control">▧</button>
-
             <button className="shutter" onClick={captureAndOCR}>
               <span />
             </button>
-
             <button className="round-control">⌁</button>
           </div>
 
+          {/* 직접 입력 버튼 */}
+          <button className="manual-entry-btn" onClick={() => setManualOpen(true)}>
+            ✏️ 직접 입력
+          </button>
+
           <nav className="bottom-tabs">
-            <button
-              className={mode === "translate" ? "active" : ""}
-              onClick={() => setMode("translate")}
-            >
-              <span>▣</span>
-              번역
+            <button className={mode === "translate" ? "active" : ""} onClick={() => setMode("translate")}>
+              <span>▣</span>번역
             </button>
-
-            <button
-              className={mode === "camera" ? "active" : ""}
-              onClick={() => setMode("camera")}
-            >
-              <span>●</span>
-              카메라
+            <button className={mode === "camera" ? "active" : ""} onClick={() => setMode("camera")}>
+              <span>●</span>카메라
             </button>
-
             <button
               className={mode === "chat" ? "active" : ""}
-              onClick={() => {
-                setMode("chat");
-                setQuestionOpen(true);
-              }}
+              onClick={() => { setMode("chat"); setQuestionOpen(true); }}
             >
-              <span>👥</span>
-              대화
+              <span>👥</span>대화
             </button>
-
-            <button
-              className={mode === "save" ? "active" : ""}
-              onClick={() => setMode("save")}
-            >
-              <span>★</span>
-              저장
+            <button className={mode === "save" ? "active" : ""} onClick={() => setMode("save")}>
+              <span>★</span>저장
             </button>
           </nav>
         </section>
@@ -328,133 +355,200 @@ export default function Home() {
       {screen === "explain" && artwork && (
         <section className="explain-screen">
           <header className="explain-header">
-            <button
-              onClick={() => {
-                setScreen("camera");
-                setTimeout(() => startCamera(), 300);
-              }}
-            >
-              ‹
-            </button>
-
+            <button onClick={() => { setScreen("camera"); setTimeout(() => startCamera(), 300); }}>‹</button>
             <div>
               <div className="explain-title-mini">AI 작품 해설</div>
               <div className="explain-sub-mini">캡션 기반 맞춤 해설</div>
             </div>
-
             <button onClick={() => setQuestionOpen(true)}>?</button>
           </header>
 
-          <section className="artwork-hero">
-            <div className="badge">✨ 분석 신뢰도 {artwork.confidence}</div>
-
-            <h1>{artwork.title}</h1>
-
-            <p className="artist-line">
-              <b>{artwork.artist}</b>
-              <br />
-              {artwork.museum} · {artwork.year}
-            </p>
-
-            <p className="summary">{artwork.summary}</p>
-          </section>
-
-          <section className="detected-info-box">
-            <div className="section-title">인식된 작품 정보</div>
-
-            <div className="info-row">
-              <span>작품명</span>
-              <strong>
-                {artwork.title || "작품명 정보가 명확하지 않습니다"}
-              </strong>
-            </div>
-
-            <div className="info-row">
-              <span>작가</span>
-              <strong>
-                {artwork.artist || "작가 정보가 명확하지 않습니다"}
-              </strong>
-            </div>
-
-            <div className="info-row">
-              <span>제작연도</span>
-              <strong>
-                {artwork.year || "제작연도 정보가 명확하지 않습니다"}
-              </strong>
-            </div>
-
-            <div className="info-row">
-              <span>소장처</span>
-              <strong>
-                {artwork.museum || "소장처 정보가 명확하지 않습니다"}
-              </strong>
-            </div>
-          </section>
-
-          <section className="explain-card">
-            <div className="section-title">간단한 작품 해설</div>
-            <p>
-              {artwork.simpleExplanation ||
-                artwork.explanation ||
-                "작품 해설을 생성하지 못했습니다."}
-            </p>
-          </section>
-
-          <section className="explain-card">
-            <div className="section-title">작가 설명</div>
-            <p>
-              {artwork.artistDescription ||
-                "작가 정보는 추가 확인이 필요합니다."}
-            </p>
-          </section>
-
-          <section className="explain-card">
-            <div className="section-title">작가의 의도</div>
-            <p>
-              {artwork.artistIntention ||
-                "작가의 의도는 추가 확인이 필요합니다."}
-            </p>
-          </section>
-
-          <section className="explain-card">
-            <div className="section-title">배경 설명</div>
-            <p>
-              {artwork.background ||
-                "작품의 시대적·전시적 배경은 추가 확인이 필요합니다."}
-            </p>
-          </section>
-
-          {artwork.viewingPoints?.length > 0 && (
-            <section className="explain-card">
-              <div className="section-title">감상 포인트</div>
-
-              <div className="viewing-points">
-                {artwork.viewingPoints.map((point, index) => (
-                  <div key={index} className="viewing-point">
-                    <span>{index + 1}</span>
-                    <p>{point}</p>
-                  </div>
-                ))}
+          {aiLoading && (
+            <div className="inline-loading">
+              <div className="inline-loading-dots">
+                <span /><span /><span />
               </div>
-            </section>
+              <p>작품 해설을 다시 생성 중입니다...</p>
+            </div>
+          )}
+
+          {!aiLoading && (
+            <>
+              <section className="artwork-hero">
+                <div className="badge">✨ 분석 신뢰도 {artwork.confidence}</div>
+                <h1>{artwork.title}</h1>
+                <p className="artist-line">
+                  <b>{artwork.artist}</b>
+                  <br />
+                  {artwork.museum} · {artwork.year}
+                </p>
+                <p className="summary">{artwork.summary}</p>
+              </section>
+
+              <section className="detected-info-box">
+                <div className="section-title-row">
+                  <div className="section-title">인식된 작품 정보</div>
+                  <button
+                    className="edit-btn"
+                    onClick={() => {
+                      setEditTitle(artwork.title === "확인 필요" ? "" : artwork.title);
+                      setEditArtist(artwork.artist === "확인 필요" ? "" : artwork.artist);
+                      setEditOpen(true);
+                    }}
+                  >
+                    ✏️ 수정
+                  </button>
+                </div>
+                <div className="info-row">
+                  <span>작품명</span>
+                  <strong>{artwork.title || "작품명 정보가 명확하지 않습니다"}</strong>
+                </div>
+                <div className="info-row">
+                  <span>작가</span>
+                  <strong>{artwork.artist || "작가 정보가 명확하지 않습니다"}</strong>
+                </div>
+                <div className="info-row">
+                  <span>제작연도</span>
+                  <strong>{artwork.year || "제작연도 정보가 명확하지 않습니다"}</strong>
+                </div>
+                <div className="info-row">
+                  <span>소장처</span>
+                  <strong>{artwork.museum || "소장처 정보가 명확하지 않습니다"}</strong>
+                </div>
+              </section>
+
+              <section className="explain-card">
+                <div className="section-title">간단한 작품 해설</div>
+                <p>{artwork.simpleExplanation || artwork.explanation || "작품 해설을 생성하지 못했습니다."}</p>
+              </section>
+
+              <section className="explain-card">
+                <div className="section-title">작가 설명</div>
+                <p>{artwork.artistDescription || "작가 정보는 추가 확인이 필요합니다."}</p>
+              </section>
+
+              <section className="explain-card">
+                <div className="section-title">작가의 의도</div>
+                <p>{artwork.artistIntention || "작가의 의도는 추가 확인이 필요합니다."}</p>
+              </section>
+
+              <section className="explain-card">
+                <div className="section-title">배경 설명</div>
+                <p>{artwork.background || "작품의 시대적·전시적 배경은 추가 확인이 필요합니다."}</p>
+              </section>
+
+              {artwork.viewingPoints?.length > 0 && (
+                <section className="explain-card">
+                  <div className="section-title">감상 포인트</div>
+                  <div className="viewing-points">
+                    {artwork.viewingPoints.map((point, index) => (
+                      <div key={index} className="viewing-point">
+                        <span>{index + 1}</span>
+                        <p>{point}</p>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </>
           )}
 
           <div className="bottom-action-area">
-            <button
-              className="ghost-action"
-              onClick={() => setQuestionOpen(true)}
-            >
-              AI에게 질문
-            </button>
+            <button className="ghost-action" onClick={() => setQuestionOpen(true)}>AI에게 질문</button>
             <button className="primary-action">기록에 저장</button>
           </div>
         </section>
       )}
 
+      {/* 직접 입력 모달 (카메라 화면) */}
+      {manualOpen && (
+        <div className="modal-backdrop" onClick={() => setManualOpen(false)}>
+          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-handle" />
+            <div className="modal-header">
+              <div>
+                <h3>직접 입력</h3>
+                <p>작품명이나 작가명을 입력해주세요.</p>
+              </div>
+              <button onClick={() => setManualOpen(false)}>×</button>
+            </div>
+
+            <div className="modal-body">
+              <label className="input-label">작품명</label>
+              <input
+                className="modal-input"
+                value={manualTitle}
+                onChange={(e) => setManualTitle(e.target.value)}
+                placeholder="예: 별이 빛나는 밤"
+                onKeyDown={(e) => { if (e.key === "Enter") submitManual(); }}
+              />
+              <label className="input-label">작가명</label>
+              <input
+                className="modal-input"
+                value={manualArtist}
+                onChange={(e) => setManualArtist(e.target.value)}
+                placeholder="예: 빈센트 반 고흐"
+                onKeyDown={(e) => { if (e.key === "Enter") submitManual(); }}
+              />
+            </div>
+
+            <button
+              className="modal-submit"
+              onClick={submitManual}
+              disabled={manualLoading || (!manualTitle.trim() && !manualArtist.trim())}
+            >
+              {manualLoading ? "해설 생성 중..." : "해설 생성하기"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 수정 모달 (explain 화면) */}
+      {editOpen && (
+        <div className="modal-backdrop" onClick={() => setEditOpen(false)}>
+          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-handle" />
+            <div className="modal-header">
+              <div>
+                <h3>작품 정보 수정</h3>
+                <p>올바른 정보를 입력하면 해설을 다시 생성해요.</p>
+              </div>
+              <button onClick={() => setEditOpen(false)}>×</button>
+            </div>
+
+            <div className="modal-body">
+              <label className="input-label">작품명</label>
+              <input
+                className="modal-input"
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                placeholder="예: 별이 빛나는 밤"
+                onKeyDown={(e) => { if (e.key === "Enter") submitEdit(); }}
+              />
+              <label className="input-label">작가명</label>
+              <input
+                className="modal-input"
+                value={editArtist}
+                onChange={(e) => setEditArtist(e.target.value)}
+                placeholder="예: 빈센트 반 고흐"
+                onKeyDown={(e) => { if (e.key === "Enter") submitEdit(); }}
+              />
+            </div>
+
+            <button
+              className="modal-submit"
+              onClick={submitEdit}
+              disabled={!editTitle.trim() && !editArtist.trim()}
+            >
+              다시 검색하기
+            </button>
+          </div>
+        </div>
+      )}
+
       {questionOpen && (
         <div className="chat-sheet">
           <div className="sheet-handle" />
-
           <div className="sheet-header">
             <div>
               <h3>작품에 대해 질문하기</h3>
@@ -469,12 +563,15 @@ export default function Home() {
                 먼저 작품 캡션을 촬영하면 해당 작품에 대해 질문할 수 있어요.
               </div>
             )}
-
             {chat.map((m, i) => (
-              <div key={i} className={`bubble ${m.role}`}>
-                {m.text}
-              </div>
+              <div key={i} className={`bubble ${m.role}`}>{m.text}</div>
             ))}
+            {chatLoading && (
+              <div className="bubble ai loading-bubble">
+                <span /><span /><span />
+              </div>
+            )}
+            <div ref={chatEndRef} />
           </div>
 
           <div className="question-box">
@@ -482,19 +579,23 @@ export default function Home() {
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
               placeholder="예: 이 작품은 왜 유명해?"
+              disabled={chatLoading}
               onKeyDown={(e) => {
-                if (e.key === "Enter") askQuestion();
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  askQuestion();
+                }
               }}
             />
-            <button onClick={askQuestion}>↑</button>
+            <button onClick={askQuestion} disabled={chatLoading || !question.trim()}>
+              {chatLoading ? "…" : "↑"}
+            </button>
           </div>
         </div>
       )}
 
       <style jsx global>{`
-        * {
-          box-sizing: border-box;
-        }
+        * { box-sizing: border-box; }
 
         body {
           margin: 0;
@@ -503,10 +604,7 @@ export default function Home() {
           background: #000;
         }
 
-        button {
-          cursor: pointer;
-          font-family: inherit;
-        }
+        button { cursor: pointer; font-family: inherit; }
 
         .app {
           width: 100vw;
@@ -516,6 +614,7 @@ export default function Home() {
           overflow: hidden;
         }
 
+        /* ── 카메라 ── */
         .camera-screen {
           width: 100vw;
           height: 100vh;
@@ -539,10 +638,10 @@ export default function Home() {
           inset: 0;
           background: linear-gradient(
             to bottom,
-            rgba(0, 0, 0, 0.48) 0%,
-            rgba(0, 0, 0, 0.08) 28%,
-            rgba(0, 0, 0, 0.04) 52%,
-            rgba(0, 0, 0, 0.76) 100%
+            rgba(0,0,0,0.48) 0%,
+            rgba(0,0,0,0.08) 28%,
+            rgba(0,0,0,0.04) 52%,
+            rgba(0,0,0,0.76) 100%
           );
           pointer-events: none;
         }
@@ -563,7 +662,7 @@ export default function Home() {
           height: 44px;
           border-radius: 999px;
           border: none;
-          background: rgba(255, 255, 255, 0.14);
+          background: rgba(255,255,255,0.14);
           color: #fff;
           backdrop-filter: blur(18px);
           font-size: 24px;
@@ -575,7 +674,7 @@ export default function Home() {
           gap: 8px;
           padding: 10px 18px;
           border-radius: 999px;
-          background: rgba(0, 0, 0, 0.58);
+          background: rgba(0,0,0,0.58);
           backdrop-filter: blur(18px);
           font-weight: 800;
           letter-spacing: -0.02em;
@@ -603,40 +702,13 @@ export default function Home() {
           position: absolute;
           width: 42px;
           height: 42px;
-          border-color: rgba(105, 229, 239, 0.95);
+          border-color: rgba(105,229,239,0.95);
         }
 
-        .top-left {
-          left: 0;
-          top: 0;
-          border-top: 4px solid;
-          border-left: 4px solid;
-          border-radius: 14px 0 0 0;
-        }
-
-        .top-right {
-          right: 0;
-          top: 0;
-          border-top: 4px solid;
-          border-right: 4px solid;
-          border-radius: 0 14px 0 0;
-        }
-
-        .bottom-left {
-          left: 0;
-          bottom: 0;
-          border-bottom: 4px solid;
-          border-left: 4px solid;
-          border-radius: 0 0 0 14px;
-        }
-
-        .bottom-right {
-          right: 0;
-          bottom: 0;
-          border-bottom: 4px solid;
-          border-right: 4px solid;
-          border-radius: 0 0 14px 0;
-        }
+        .top-left    { left: 0;  top: 0;    border-top: 4px solid; border-left: 4px solid;   border-radius: 14px 0 0 0; }
+        .top-right   { right: 0; top: 0;    border-top: 4px solid; border-right: 4px solid;  border-radius: 0 14px 0 0; }
+        .bottom-left { left: 0;  bottom: 0; border-bottom: 4px solid; border-left: 4px solid;  border-radius: 0 0 0 14px; }
+        .bottom-right{ right: 0; bottom: 0; border-bottom: 4px solid; border-right: 4px solid; border-radius: 0 0 14px 0; }
 
         .guide-text {
           position: absolute;
@@ -646,7 +718,7 @@ export default function Home() {
           white-space: nowrap;
           padding: 9px 14px;
           border-radius: 999px;
-          background: rgba(0, 0, 0, 0.58);
+          background: rgba(0,0,0,0.58);
           backdrop-filter: blur(14px);
           font-size: 13px;
           font-weight: 700;
@@ -660,7 +732,7 @@ export default function Home() {
           transform: translate(-50%, -50%);
           padding: 14px 20px;
           border-radius: 14px;
-          background: rgba(0, 0, 0, 0.74);
+          background: rgba(0,0,0,0.74);
           backdrop-filter: blur(16px);
           font-size: 17px;
           font-weight: 800;
@@ -678,16 +750,14 @@ export default function Home() {
           gap: 12px;
           padding: 13px 20px;
           border-radius: 999px;
-          background: rgba(0, 0, 0, 0.72);
+          background: rgba(0,0,0,0.72);
           backdrop-filter: blur(18px);
           font-size: 16px;
           font-weight: 800;
           white-space: nowrap;
         }
 
-        .language-pill span {
-          color: #b7b3c9;
-        }
+        .language-pill span { color: #b7b3c9; }
 
         .camera-controls {
           position: absolute;
@@ -706,7 +776,7 @@ export default function Home() {
           height: 70px;
           border-radius: 999px;
           border: none;
-          background: rgba(255, 255, 255, 0.13);
+          background: rgba(255,255,255,0.13);
           backdrop-filter: blur(18px);
           color: #fff;
           font-size: 28px;
@@ -717,7 +787,7 @@ export default function Home() {
           height: 96px;
           border-radius: 999px;
           border: none;
-          background: rgba(255, 255, 255, 0.18);
+          background: rgba(255,255,255,0.18);
           display: flex;
           align-items: center;
           justify-content: center;
@@ -730,6 +800,25 @@ export default function Home() {
           border-radius: 999px;
           background: #fff;
           display: block;
+        }
+
+        /* 직접 입력 버튼 */
+        .manual-entry-btn {
+          position: absolute;
+          z-index: 7;
+          left: 50%;
+          bottom: 155px;
+          transform: translateX(-50%);
+          border: none;
+          border-radius: 999px;
+          padding: 10px 20px;
+          background: rgba(255,255,255,0.15);
+          backdrop-filter: blur(18px);
+          color: #fff;
+          font-size: 14px;
+          font-weight: 800;
+          white-space: nowrap;
+          border: 1px solid rgba(255,255,255,0.25);
         }
 
         .bottom-tabs {
@@ -746,7 +835,7 @@ export default function Home() {
         .bottom-tabs button {
           border: none;
           background: transparent;
-          color: rgba(255, 255, 255, 0.58);
+          color: rgba(255,255,255,0.58);
           display: flex;
           flex-direction: column;
           gap: 5px;
@@ -755,13 +844,8 @@ export default function Home() {
           font-weight: 800;
         }
 
-        .bottom-tabs button span {
-          font-size: 28px;
-        }
-
-        .bottom-tabs button.active {
-          color: #61dff3;
-        }
+        .bottom-tabs button span { font-size: 28px; }
+        .bottom-tabs button.active { color: #61dff3; }
 
         .camera-fallback {
           position: absolute;
@@ -787,6 +871,7 @@ export default function Home() {
           font-weight: 900;
         }
 
+        /* ── explain ── */
         .explain-screen {
           min-height: 100vh;
           background:
@@ -810,10 +895,10 @@ export default function Home() {
           height: 44px;
           border-radius: 999px;
           border: 1px solid #edeaf4;
-          background: rgba(255, 255, 255, 0.9);
+          background: rgba(255,255,255,0.9);
           color: #171729;
           font-size: 24px;
-          box-shadow: 0 8px 22px rgba(40, 35, 80, 0.08);
+          box-shadow: 0 8px 22px rgba(40,35,80,0.08);
         }
 
         .explain-title-mini {
@@ -832,12 +917,46 @@ export default function Home() {
           text-transform: uppercase;
         }
 
+        /* explain 내 로딩 */
+        .inline-loading {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 16px;
+          padding: 80px 20px;
+          color: #7254e8;
+        }
+
+        .inline-loading p {
+          margin: 0;
+          font-size: 15px;
+          font-weight: 700;
+          color: #7254e8;
+        }
+
+        .inline-loading-dots {
+          display: flex;
+          gap: 8px;
+        }
+
+        .inline-loading-dots span {
+          width: 10px;
+          height: 10px;
+          border-radius: 50%;
+          background: #7254e8;
+          animation: bounce 1.2s infinite ease-in-out;
+        }
+
+        .inline-loading-dots span:nth-child(2) { animation-delay: 0.2s; }
+        .inline-loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+
         .artwork-hero {
           padding: 24px;
           border-radius: 32px;
           background: linear-gradient(145deg, #ffffff, #f8f3ff);
           border: 1px solid #eeeaf8;
-          box-shadow: 0 18px 45px rgba(60, 45, 100, 0.1);
+          box-shadow: 0 18px 45px rgba(60,45,100,0.1);
         }
 
         .badge {
@@ -877,17 +996,34 @@ export default function Home() {
           margin-top: 18px;
           padding: 20px;
           border-radius: 28px;
-          background: rgba(255, 255, 255, 0.94);
+          background: rgba(255,255,255,0.94);
           border: 1px solid #eeeaf4;
-          box-shadow: 0 14px 35px rgba(40, 35, 80, 0.07);
+          box-shadow: 0 14px 35px rgba(40,35,80,0.07);
+        }
+
+        .section-title-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 12px;
         }
 
         .section-title {
-          margin-bottom: 12px;
           color: #7254e8;
           font-size: 17px;
           font-weight: 900;
           letter-spacing: -0.04em;
+        }
+
+        /* 수정 버튼 */
+        .edit-btn {
+          border: 1px solid #e0d8ff;
+          border-radius: 999px;
+          padding: 6px 14px;
+          background: #f4f0ff;
+          color: #7254e8;
+          font-size: 13px;
+          font-weight: 800;
         }
 
         .info-row {
@@ -899,9 +1035,7 @@ export default function Home() {
           border-bottom: 1px solid #eeeaf4;
         }
 
-        .info-row:last-child {
-          border-bottom: none;
-        }
+        .info-row:last-child { border-bottom: none; }
 
         .info-row span {
           color: #8a869c;
@@ -925,16 +1059,9 @@ export default function Home() {
           line-height: 1.75;
         }
 
-        .viewing-points {
-          display: grid;
-          gap: 12px;
-        }
+        .viewing-points { display: grid; gap: 12px; }
 
-        .viewing-point {
-          display: flex;
-          gap: 12px;
-          align-items: flex-start;
-        }
+        .viewing-point { display: flex; gap: 12px; align-items: flex-start; }
 
         .viewing-point span {
           width: 26px;
@@ -974,7 +1101,7 @@ export default function Home() {
           padding: 17px 14px;
           font-size: 16px;
           font-weight: 900;
-          box-shadow: 0 14px 35px rgba(45, 35, 90, 0.18);
+          box-shadow: 0 14px 35px rgba(45,35,90,0.18);
         }
 
         .ghost-action {
@@ -988,6 +1115,104 @@ export default function Home() {
           color: #fff;
         }
 
+        /* ── 모달 (직접입력 / 수정) ── */
+        .modal-backdrop {
+          position: fixed;
+          z-index: 40;
+          inset: 0;
+          background: rgba(0,0,0,0.5);
+          backdrop-filter: blur(4px);
+          display: flex;
+          align-items: flex-end;
+        }
+
+        .modal-sheet {
+          width: 100%;
+          padding: 12px 20px 36px;
+          border-radius: 30px 30px 0 0;
+          background: #fff;
+          color: #171729;
+          box-shadow: 0 -20px 50px rgba(0,0,0,0.24);
+        }
+
+        .modal-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 12px;
+          margin-bottom: 24px;
+        }
+
+        .modal-header h3 {
+          margin: 0;
+          font-size: 22px;
+          letter-spacing: -0.04em;
+        }
+
+        .modal-header p {
+          margin: 5px 0 0;
+          color: #777184;
+          font-size: 13px;
+        }
+
+        .modal-header button {
+          width: 36px;
+          height: 36px;
+          border-radius: 999px;
+          border: none;
+          background: #f1eff7;
+          font-size: 22px;
+          color: #171729;
+          flex-shrink: 0;
+        }
+
+        .modal-body {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          margin-bottom: 20px;
+        }
+
+        .input-label {
+          font-size: 13px;
+          font-weight: 800;
+          color: #7254e8;
+          margin-top: 8px;
+        }
+
+        .modal-input {
+          width: 100%;
+          border: 1.5px solid #e7e4ef;
+          border-radius: 16px;
+          padding: 14px 16px;
+          font-size: 16px;
+          font-family: inherit;
+          outline: none;
+          color: #171729;
+          transition: border-color 0.15s;
+        }
+
+        .modal-input:focus { border-color: #7254e8; }
+
+        .modal-submit {
+          width: 100%;
+          border: none;
+          border-radius: 22px;
+          padding: 18px;
+          font-size: 17px;
+          font-weight: 900;
+          background: linear-gradient(135deg, #7357ff, #bd43ff);
+          color: #fff;
+          box-shadow: 0 14px 35px rgba(45,35,90,0.18);
+          transition: opacity 0.15s;
+        }
+
+        .modal-submit:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+
+        /* ── 채팅 시트 ── */
         .chat-sheet {
           position: fixed;
           z-index: 30;
@@ -997,10 +1222,10 @@ export default function Home() {
           height: 58vh;
           padding: 12px 20px 24px;
           border-radius: 30px 30px 0 0;
-          background: rgba(255, 255, 255, 0.96);
+          background: rgba(255,255,255,0.96);
           color: #171729;
           backdrop-filter: blur(20px);
-          box-shadow: 0 -20px 50px rgba(0, 0, 0, 0.24);
+          box-shadow: 0 -20px 50px rgba(0,0,0,0.24);
           display: flex;
           flex-direction: column;
         }
@@ -1048,6 +1273,7 @@ export default function Home() {
           display: flex;
           flex-direction: column;
           gap: 10px;
+          padding-bottom: 4px;
         }
 
         .bubble {
@@ -1071,6 +1297,30 @@ export default function Home() {
           border-top-right-radius: 6px;
         }
 
+        .loading-bubble {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          padding: 16px 18px;
+          width: fit-content;
+        }
+
+        .loading-bubble span {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          background: #9b8fc7;
+          animation: bounce 1.2s infinite ease-in-out;
+        }
+
+        .loading-bubble span:nth-child(2) { animation-delay: 0.2s; }
+        .loading-bubble span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes bounce {
+          0%, 80%, 100% { transform: translateY(0); opacity: 0.5; }
+          40%            { transform: translateY(-6px); opacity: 1; }
+        }
+
         .question-box {
           display: flex;
           gap: 8px;
@@ -1084,7 +1334,10 @@ export default function Home() {
           padding: 14px;
           outline: none;
           font-size: 15px;
+          font-family: inherit;
         }
+
+        .question-box input:disabled { background: #f7f5fc; color: #aaa; }
 
         .question-box button {
           width: 50px;
@@ -1094,8 +1347,12 @@ export default function Home() {
           color: #fff;
           font-size: 20px;
           font-weight: 900;
+          transition: opacity 0.15s;
         }
 
+        .question-box button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+        /* ── 데스크탑 ── */
         @media (min-width: 700px) {
           .app,
           .camera-screen,
@@ -1107,7 +1364,7 @@ export default function Home() {
             border-radius: 42px;
             border: 8px solid #111;
             overflow: hidden;
-            box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
+            box-shadow: 0 24px 70px rgba(0,0,0,0.35);
           }
 
           .chat-sheet {
@@ -1119,9 +1376,14 @@ export default function Home() {
             border-radius: 30px;
           }
 
-          body {
-            background: #eef8f9;
+          .modal-backdrop { justify-content: center; align-items: flex-end; }
+
+          .modal-sheet {
+            width: 430px;
+            border-radius: 30px 30px 0 0;
           }
+
+          body { background: #eef8f9; }
         }
       `}</style>
     </main>
