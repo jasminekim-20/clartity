@@ -7,15 +7,13 @@ export default function Home() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
-  const chatEndRef = useRef(null);
 
-  const [screen, setScreen] = useState("camera"); // "camera" | "explain" | "manual"
+  const [screen, setScreen] = useState("camera");
   const [mode, setMode] = useState("camera");
 
   const [cameraOn, setCameraOn] = useState(false);
   const [ocrLoading, setOcrLoading] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
-  const [chatLoading, setChatLoading] = useState(false);
 
   const [ocrText, setOcrText] = useState("");
   const [artwork, setArtwork] = useState(null);
@@ -24,11 +22,10 @@ export default function Home() {
   const [question, setQuestion] = useState("");
   const [chat, setChat] = useState([]);
 
-  const [confirmVisible, setConfirmVisible] = useState(true);
-
+  const [correctionOpen, setCorrectionOpen] = useState(false);
   const [manualTitle, setManualTitle] = useState("");
   const [manualArtist, setManualArtist] = useState("");
-  const [manualLoading, setManualLoading] = useState(false);
+  const [correctionLoading, setCorrectionLoading] = useState(false);
 
   const userProfile = {
     level: "미술 입문자",
@@ -38,14 +35,11 @@ export default function Home() {
 
   useEffect(() => {
     startCamera();
-    return () => stopCamera();
-  }, []);
 
-  useEffect(() => {
-    if (chatEndRef.current) {
-      chatEndRef.current.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [chat, chatLoading]);
+    return () => {
+      stopCamera();
+    };
+  }, []);
 
   const startCamera = async () => {
     try {
@@ -53,15 +47,21 @@ export default function Home() {
         alert("이 브라우저에서는 카메라 기능을 사용할 수 없습니다.");
         return;
       }
+
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
+        video: {
+          facingMode: "environment",
+        },
         audio: false,
       });
+
       streamRef.current = stream;
+
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
+
       setCameraOn(true);
     } catch (error) {
       console.error(error);
@@ -71,25 +71,11 @@ export default function Home() {
 
   const stopCamera = () => {
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
-    setCameraOn(false);
-  };
 
-  const fetchArtworkInfo = async (text) => {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
-    const res = await fetch("/api/explain", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ocrText: text, userProfile }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "AI 해설 생성에 실패했습니다.");
-    return data;
+    setCameraOn(false);
   };
 
   const captureAndOCR = async () => {
@@ -100,19 +86,21 @@ export default function Home() {
     setOcrText("");
     setArtwork(null);
     setChat([]);
-    setConfirmVisible(true);
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
+
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
+
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     try {
       const result = await Tesseract.recognize(canvas, "eng+kor+fra+jpn", {
         logger: (m) => console.log(m),
       });
+
       const text = result.data.text.trim();
 
       if (!text || text.length < 3) {
@@ -124,19 +112,50 @@ export default function Home() {
       setOcrLoading(false);
       setAiLoading(true);
 
-      const data = await fetchArtworkInfo(text);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+      }, 30000);
+
+      const response = await fetch("/api/explain", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ocrText: text,
+          userProfile,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "AI 해설 생성에 실패했습니다.");
+      }
+
       setArtwork(data);
-      setChat([{
-        role: "ai",
-        text: `「${data.title}」 작품 정보를 분석했어요. 분석 신뢰도는 ${data.confidence}입니다. 궁금한 점이 있으면 질문해보세요!`,
-      }]);
+
+      setChat([
+        {
+          role: "ai",
+          text: `OCR 캡션을 바탕으로 「${data.title}」 작품 정보를 분석했어요. 분석 신뢰도는 ${data.confidence}입니다.`,
+        },
+      ]);
+
       setScreen("explain");
     } catch (error) {
       console.error(error);
+
       if (error.name === "AbortError") {
-        alert("시간이 너무 오래 걸립니다. 잠시 후 다시 시도해주세요.");
+        alert(
+          "AI 해설 생성 시간이 너무 오래 걸립니다. 잠시 후 다시 시도해주세요."
+        );
       } else {
-        alert(error.message || "오류가 발생했습니다.");
+        alert(error.message || "OCR 또는 AI 해설 생성 중 오류가 발생했습니다.");
       }
     } finally {
       setOcrLoading(false);
@@ -144,75 +163,139 @@ export default function Home() {
     }
   };
 
-  // 직접 입력 후 해설 재생성
-  const submitManual = async () => {
+  const regenerateWithCorrection = async () => {
     if (!manualTitle.trim() && !manualArtist.trim()) {
-      alert("작품명 또는 작가명을 입력해주세요.");
+      alert("작품명 또는 작가명 중 하나 이상을 입력해주세요.");
       return;
     }
 
-    setManualLoading(true);
-
-    const synthesized = [
-      manualTitle.trim() && `작품명: ${manualTitle.trim()}`,
-      manualArtist.trim() && `작가명: ${manualArtist.trim()}`,
-    ].filter(Boolean).join("\n");
+    setCorrectionLoading(true);
 
     try {
-      const data = await fetchArtworkInfo(synthesized);
-      setOcrText(synthesized);
+      const response = await fetch("/api/explain", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ocrText:
+            ocrText ||
+            `사용자가 직접 입력한 작품 정보: ${manualTitle} ${manualArtist}`,
+          userProfile,
+          manualTitle: manualTitle.trim(),
+          manualArtist: manualArtist.trim(),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.error || "수정된 작품 정보로 해설을 생성하지 못했습니다."
+        );
+      }
+
       setArtwork(data);
-      setChat([{
-        role: "ai",
-        text: `「${data.title}」 작품 정보를 새로 분석했어요. 분석 신뢰도는 ${data.confidence}입니다.`,
-      }]);
-      setConfirmVisible(false);
+
+      setChat([
+        {
+          role: "ai",
+          text: `사용자가 입력한 작품 정보를 바탕으로 「${data.title}」 작품 해설을 다시 생성했어요. 분석 신뢰도는 ${data.confidence}입니다.`,
+        },
+      ]);
+
+      setCorrectionOpen(false);
       setManualTitle("");
       setManualArtist("");
       setScreen("explain");
     } catch (error) {
       console.error(error);
-      alert(error.message || "해설 생성 중 오류가 발생했습니다.");
+      alert(error.message || "작품 정보를 수정하는 중 오류가 발생했습니다.");
     } finally {
-      setManualLoading(false);
+      setCorrectionLoading(false);
     }
   };
 
   const askQuestion = async () => {
-    const trimmed = question.trim();
-    if (!trimmed || chatLoading) return;
-    if (!ocrText) { alert("먼저 작품 캡션을 인식해주세요."); return; }
+    if (!question.trim()) return;
 
-    const userMessage = { role: "user", text: trimmed };
-    const nextChat = [...chat, userMessage];
-    setChat(nextChat);
+    if (!ocrText && !artwork) {
+      alert("먼저 작품 캡션을 인식하거나 작품 정보를 입력해주세요.");
+      return;
+    }
+
+    const userQuestion = question.trim();
+
+    setChat((prev) => [
+      ...prev,
+      {
+        role: "user",
+        text: userQuestion,
+      },
+    ]);
+
     setQuestion("");
-    setChatLoading(true);
 
     try {
-      const res = await fetch("/api/chat", {
+      const response = await fetch("/api/explain", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ocrText, userProfile, question: trimmed, chatHistory: nextChat }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ocrText:
+            ocrText ||
+            `현재 작품 정보: ${artwork?.title || ""} ${artwork?.artist || ""}`,
+          userProfile,
+          question: userQuestion,
+          manualTitle: artwork?.title || "",
+          manualArtist: artwork?.artist || "",
+        }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "답변 생성에 실패했습니다.");
-      setChat((prev) => [...prev, { role: "ai", text: data.answer || "답변을 생성하지 못했습니다." }]);
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "질문 답변 생성에 실패했습니다.");
+      }
+
+      setChat((prev) => [
+        ...prev,
+        {
+          role: "ai",
+          text:
+            data.answer ||
+            data.simpleExplanation ||
+            data.explanation ||
+            data.summary ||
+            "이 작품에 대한 추가 설명을 생성했습니다.",
+        },
+      ]);
     } catch (error) {
       console.error(error);
-      setChat((prev) => [...prev, { role: "ai", text: "오류가 발생했습니다. 다시 시도해주세요." }]);
-    } finally {
-      setChatLoading(false);
+
+      setChat((prev) => [
+        ...prev,
+        {
+          role: "ai",
+          text: "질문에 답변하는 중 오류가 발생했습니다.",
+        },
+      ]);
     }
   };
 
   return (
     <main className="app">
-
-      {/* ── 카메라 ── */}
       {screen === "camera" && (
         <section className="camera-screen">
-          <video ref={videoRef} className="camera-video" playsInline muted autoPlay />
+          <video
+            ref={videoRef}
+            className="camera-video"
+            playsInline
+            muted
+            autoPlay
+          />
+
           <canvas ref={canvasRef} style={{ display: "none" }} />
 
           {!cameraOn && (
@@ -224,7 +307,12 @@ export default function Home() {
 
           <div className="top-bar">
             <button className="icon-btn">‹</button>
-            <div className="app-pill"><span className="app-dot" />Clartity</div>
+
+            <div className="app-pill">
+              <span className="app-dot" />
+              Clartity
+            </div>
+
             <button className="icon-btn">?</button>
           </div>
 
@@ -236,109 +324,195 @@ export default function Home() {
             <div className="guide-text">작품 캡션을 이 영역에 맞춰주세요</div>
           </div>
 
-          {ocrLoading && <div className="loading-toast">캡션 글자를 읽는 중입니다...</div>}
-          {aiLoading  && <div className="loading-toast">작품 해설을 생성 중입니다...</div>}
+          {ocrLoading && (
+            <div className="loading-toast">캡션 글자를 읽는 중입니다...</div>
+          )}
+
+          {aiLoading && (
+            <div className="loading-toast">작품 해설을 생성 중입니다...</div>
+          )}
 
           <div className="language-pill">
-            캡션 인식 <span>⌄</span><b>→</b>맞춤 해설 <span>⌄</span>
+            캡션 인식 <span>⌄</span>
+            <b>→</b>
+            맞춤 해설 <span>⌄</span>
           </div>
 
           <div className="camera-controls">
             <button className="round-control">▧</button>
-            <button className="shutter" onClick={captureAndOCR}><span /></button>
+
+            <button className="shutter" onClick={captureAndOCR}>
+              <span />
+            </button>
+
             <button className="round-control">⌁</button>
           </div>
 
           <nav className="bottom-tabs">
-            <button className={mode === "translate" ? "active" : ""} onClick={() => setMode("translate")}><span>▣</span>번역</button>
-            <button className={mode === "camera"    ? "active" : ""} onClick={() => setMode("camera")}><span>●</span>카메라</button>
-            <button className={mode === "chat"      ? "active" : ""} onClick={() => { setMode("chat"); setQuestionOpen(true); }}><span>👥</span>대화</button>
-            <button className={mode === "save"      ? "active" : ""} onClick={() => setMode("save")}><span>★</span>저장</button>
+            <button
+              className={mode === "translate" ? "active" : ""}
+              onClick={() => setMode("translate")}
+            >
+              <span>▣</span>
+              번역
+            </button>
+
+            <button
+              className={mode === "camera" ? "active" : ""}
+              onClick={() => setMode("camera")}
+            >
+              <span>●</span>
+              카메라
+            </button>
+
+            <button
+              className={mode === "chat" ? "active" : ""}
+              onClick={() => {
+                setMode("chat");
+                setQuestionOpen(true);
+              }}
+            >
+              <span>👥</span>
+              대화
+            </button>
+
+            <button
+              className={mode === "save" ? "active" : ""}
+              onClick={() => setMode("save")}
+            >
+              <span>★</span>
+              저장
+            </button>
           </nav>
         </section>
       )}
 
-      {/* ── 해설 화면 ── */}
       {screen === "explain" && artwork && (
         <section className="explain-screen">
           <header className="explain-header">
-            <button onClick={() => { setScreen("camera"); setTimeout(() => startCamera(), 300); }}>‹</button>
+            <button
+              onClick={() => {
+                setScreen("camera");
+                setTimeout(() => startCamera(), 300);
+              }}
+            >
+              ‹
+            </button>
+
             <div>
               <div className="explain-title-mini">AI 작품 해설</div>
               <div className="explain-sub-mini">캡션 기반 맞춤 해설</div>
             </div>
+
             <button onClick={() => setQuestionOpen(true)}>?</button>
           </header>
 
-          {/* 작품 확인 배너 */}
-          {confirmVisible && (
-            <div className="confirm-banner">
-              <div className="confirm-left">
-                <span className="confirm-emoji">🖼️</span>
-                <div>
-                  <p className="confirm-q">혹시 이 작품이 맞나요?</p>
-                  <p className="confirm-name">
-                    {artwork.title}
-                    {artwork.artist !== "확인 필요" && <span> · {artwork.artist}</span>}
-                  </p>
-                </div>
-              </div>
-              <div className="confirm-btns">
-                <button className="confirm-yes" onClick={() => setConfirmVisible(false)}>맞아요</button>
-                <button className="confirm-no" onClick={() => {
-                  setManualTitle("");
-                  setManualArtist("");
-                  setScreen("manual");
-                }}>아니에요</button>
-              </div>
-            </div>
-          )}
+          <button
+            className="wrong-artwork-button"
+            onClick={() => {
+              setManualTitle(
+                artwork.title && !artwork.title.includes("명확하지")
+                  ? artwork.title
+                  : ""
+              );
+              setManualArtist(
+                artwork.artist && !artwork.artist.includes("명확하지")
+                  ? artwork.artist
+                  : ""
+              );
+              setCorrectionOpen(true);
+            }}
+          >
+            이 작품이 아닌가요? 직접 수정하기
+          </button>
 
           <section className="artwork-hero">
             <div className="badge">✨ 분석 신뢰도 {artwork.confidence}</div>
+
             <h1>{artwork.title}</h1>
+
             <p className="artist-line">
-              <b>{artwork.artist}</b><br />
+              <b>{artwork.artist}</b>
+              <br />
               {artwork.museum} · {artwork.year}
             </p>
+
             <p className="summary">{artwork.summary}</p>
           </section>
 
           <section className="detected-info-box">
             <div className="section-title">인식된 작품 정보</div>
-            <div className="info-row"><span>작품명</span><strong>{artwork.title || "확인 필요"}</strong></div>
-            <div className="info-row"><span>작가</span><strong>{artwork.artist || "확인 필요"}</strong></div>
-            <div className="info-row"><span>제작연도</span><strong>{artwork.year || "확인 필요"}</strong></div>
-            <div className="info-row"><span>소장처</span><strong>{artwork.museum || "확인 필요"}</strong></div>
+
+            <div className="info-row">
+              <span>작품명</span>
+              <strong>
+                {artwork.title || "작품명 정보가 명확하지 않습니다"}
+              </strong>
+            </div>
+
+            <div className="info-row">
+              <span>작가</span>
+              <strong>
+                {artwork.artist || "작가 정보가 명확하지 않습니다"}
+              </strong>
+            </div>
+
+            <div className="info-row">
+              <span>제작연도</span>
+              <strong>
+                {artwork.year || "제작연도 정보가 명확하지 않습니다"}
+              </strong>
+            </div>
+
+            <div className="info-row">
+              <span>소장처</span>
+              <strong>
+                {artwork.museum || "소장처 정보가 명확하지 않습니다"}
+              </strong>
+            </div>
           </section>
 
           <section className="explain-card">
             <div className="section-title">간단한 작품 해설</div>
-            <p>{artwork.simpleExplanation || artwork.explanation || "작품 해설을 생성하지 못했습니다."}</p>
+            <p>
+              {artwork.simpleExplanation ||
+                artwork.explanation ||
+                "작품 해설을 생성하지 못했습니다."}
+            </p>
           </section>
 
           <section className="explain-card">
             <div className="section-title">작가 설명</div>
-            <p>{artwork.artistDescription || "추가 확인이 필요합니다."}</p>
+            <p>
+              {artwork.artistDescription ||
+                "작가 정보는 추가 확인이 필요합니다."}
+            </p>
           </section>
 
           <section className="explain-card">
             <div className="section-title">작가의 의도</div>
-            <p>{artwork.artistIntention || "추가 확인이 필요합니다."}</p>
+            <p>
+              {artwork.artistIntention ||
+                "작가의 의도는 추가 확인이 필요합니다."}
+            </p>
           </section>
 
           <section className="explain-card">
             <div className="section-title">배경 설명</div>
-            <p>{artwork.background || "추가 확인이 필요합니다."}</p>
+            <p>
+              {artwork.background ||
+                "작품의 시대적·전시적 배경은 추가 확인이 필요합니다."}
+            </p>
           </section>
 
           {artwork.viewingPoints?.length > 0 && (
             <section className="explain-card">
               <div className="section-title">감상 포인트</div>
+
               <div className="viewing-points">
-                {artwork.viewingPoints.map((point, i) => (
-                  <div key={i} className="viewing-point">
-                    <span>{i + 1}</span>
+                {artwork.viewingPoints.map((point, index) => (
+                  <div key={index} className="viewing-point">
+                    <span>{index + 1}</span>
                     <p>{point}</p>
                   </div>
                 ))}
@@ -347,85 +521,99 @@ export default function Home() {
           )}
 
           <div className="bottom-action-area">
-            <button className="ghost-action" onClick={() => setQuestionOpen(true)}>AI에게 질문</button>
+            <button
+              className="ghost-action"
+              onClick={() => setQuestionOpen(true)}
+            >
+              AI에게 질문
+            </button>
             <button className="primary-action">기록에 저장</button>
           </div>
         </section>
       )}
 
-      {/* ── 직접 입력 화면 ── */}
-      {screen === "manual" && (
-        <section className="manual-screen">
-          <header className="manual-header">
-            <button className="manual-back" onClick={() => setScreen("explain")}>‹</button>
-            <div>
-              <div className="explain-title-mini">작품 직접 입력</div>
-              <div className="explain-sub-mini">알고 있는 정보로 다시 검색</div>
+      {correctionOpen && (
+        <div className="correction-overlay">
+          <div className="correction-modal">
+            <div className="correction-header">
+              <div>
+                <h3>작품 정보 직접 입력</h3>
+                <p>
+                  AI가 작품을 잘못 인식했다면 작품명과 작가명을 직접
+                  입력해주세요. 입력한 정보를 기준으로 해설을 다시 생성합니다.
+                </p>
+              </div>
+
+              <button onClick={() => setCorrectionOpen(false)}>×</button>
             </div>
-            <div style={{ width: 44 }} />
-          </header>
 
-          <div className="manual-body">
-            <div className="manual-illust">🎨</div>
-            <p className="manual-desc">
-              작품명이나 작가명을 입력하면<br />
-              정확한 해설을 다시 찾아드릴게요.
-            </p>
+            <div className="correction-form">
+              <label>
+                작품명
+                <input
+                  value={manualTitle}
+                  onChange={(e) => setManualTitle(e.target.value)}
+                  placeholder="예: 모나리자"
+                />
+              </label>
 
-            <label className="input-label">작품명</label>
-            <input
-              className="manual-input"
-              value={manualTitle}
-              onChange={(e) => setManualTitle(e.target.value)}
-              placeholder="예: 별이 빛나는 밤"
-              onKeyDown={(e) => { if (e.key === "Enter") submitManual(); }}
-            />
+              <label>
+                작가명
+                <input
+                  value={manualArtist}
+                  onChange={(e) => setManualArtist(e.target.value)}
+                  placeholder="예: 레오나르도 다빈치"
+                />
+              </label>
+            </div>
 
-            <label className="input-label">작가명</label>
-            <input
-              className="manual-input"
-              value={manualArtist}
-              onChange={(e) => setManualArtist(e.target.value)}
-              placeholder="예: 빈센트 반 고흐"
-              onKeyDown={(e) => { if (e.key === "Enter") submitManual(); }}
-            />
+            <div className="correction-actions">
+              <button
+                className="cancel-correction"
+                onClick={() => setCorrectionOpen(false)}
+              >
+                취소
+              </button>
 
-            <button
-              className="manual-submit"
-              onClick={submitManual}
-              disabled={manualLoading || (!manualTitle.trim() && !manualArtist.trim())}
-            >
-              {manualLoading
-                ? <span className="btn-loading"><span /><span /><span /></span>
-                : "이 작품으로 해설 보기"}
-            </button>
+              <button
+                className="submit-correction"
+                onClick={regenerateWithCorrection}
+                disabled={correctionLoading}
+              >
+                {correctionLoading
+                  ? "해설 다시 생성 중..."
+                  : "이 정보로 다시 해설 보기"}
+              </button>
+            </div>
           </div>
-        </section>
+        </div>
       )}
 
-      {/* ── 채팅 시트 ── */}
       {questionOpen && (
         <div className="chat-sheet">
           <div className="sheet-handle" />
+
           <div className="sheet-header">
             <div>
               <h3>작품에 대해 질문하기</h3>
-              <p>인식된 캡션을 바탕으로 답변합니다.</p>
+              <p>인식된 캡션 또는 수정된 작품 정보를 바탕으로 답변합니다.</p>
             </div>
             <button onClick={() => setQuestionOpen(false)}>×</button>
           </div>
 
           <div className="chat-list">
             {chat.length === 0 && (
-              <div className="bubble ai">먼저 작품 캡션을 촬영하면 해당 작품에 대해 질문할 수 있어요.</div>
+              <div className="bubble ai">
+                먼저 작품 캡션을 촬영하거나 작품 정보를 입력하면 해당 작품에
+                대해 질문할 수 있어요.
+              </div>
             )}
+
             {chat.map((m, i) => (
-              <div key={i} className={`bubble ${m.role}`}>{m.text}</div>
+              <div key={i} className={`bubble ${m.role}`}>
+                {m.text}
+              </div>
             ))}
-            {chatLoading && (
-              <div className="bubble ai loading-bubble"><span /><span /><span /></div>
-            )}
-            <div ref={chatEndRef} />
           </div>
 
           <div className="question-box">
@@ -433,18 +621,19 @@ export default function Home() {
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
               placeholder="예: 이 작품은 왜 유명해?"
-              disabled={chatLoading}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); askQuestion(); } }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") askQuestion();
+              }}
             />
-            <button onClick={askQuestion} disabled={chatLoading || !question.trim()}>
-              {chatLoading ? "…" : "↑"}
-            </button>
+            <button onClick={askQuestion}>↑</button>
           </div>
         </div>
       )}
 
       <style jsx global>{`
-        * { box-sizing: border-box; }
+        * {
+          box-sizing: border-box;
+        }
 
         body {
           margin: 0;
@@ -453,7 +642,10 @@ export default function Home() {
           background: #000;
         }
 
-        button { cursor: pointer; font-family: inherit; }
+        button {
+          cursor: pointer;
+          font-family: inherit;
+        }
 
         .app {
           width: 100vw;
@@ -463,7 +655,6 @@ export default function Home() {
           overflow: hidden;
         }
 
-        /* ── 카메라 ── */
         .camera-screen {
           width: 100vw;
           height: 100vh;
@@ -487,8 +678,10 @@ export default function Home() {
           inset: 0;
           background: linear-gradient(
             to bottom,
-            rgba(0,0,0,0.48) 0%, rgba(0,0,0,0.08) 28%,
-            rgba(0,0,0,0.04) 52%, rgba(0,0,0,0.76) 100%
+            rgba(0, 0, 0, 0.48) 0%,
+            rgba(0, 0, 0, 0.08) 28%,
+            rgba(0, 0, 0, 0.04) 52%,
+            rgba(0, 0, 0, 0.76) 100%
           );
           pointer-events: none;
         }
@@ -496,34 +689,40 @@ export default function Home() {
         .top-bar {
           position: absolute;
           z-index: 5;
-          top: 22px; left: 18px; right: 18px;
+          top: 22px;
+          left: 18px;
+          right: 18px;
           display: flex;
           align-items: center;
           justify-content: space-between;
         }
 
         .icon-btn {
-          width: 44px; height: 44px;
+          width: 44px;
+          height: 44px;
           border-radius: 999px;
           border: none;
-          background: rgba(255,255,255,0.14);
+          background: rgba(255, 255, 255, 0.14);
           color: #fff;
           backdrop-filter: blur(18px);
           font-size: 24px;
         }
 
         .app-pill {
-          display: flex; align-items: center; gap: 8px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
           padding: 10px 18px;
           border-radius: 999px;
-          background: rgba(0,0,0,0.58);
+          background: rgba(0, 0, 0, 0.58);
           backdrop-filter: blur(18px);
           font-weight: 800;
           letter-spacing: -0.02em;
         }
 
         .app-dot {
-          width: 8px; height: 8px;
+          width: 8px;
+          height: 8px;
           background: #4ee6c0;
           border-radius: 50%;
           box-shadow: 0 0 12px #4ee6c0;
@@ -532,7 +731,8 @@ export default function Home() {
         .scan-guide {
           position: absolute;
           z-index: 3;
-          left: 34px; right: 34px;
+          left: 34px;
+          right: 34px;
           top: 25%;
           height: 210px;
           pointer-events: none;
@@ -540,86 +740,132 @@ export default function Home() {
 
         .corner {
           position: absolute;
-          width: 42px; height: 42px;
-          border-color: rgba(105,229,239,0.95);
+          width: 42px;
+          height: 42px;
+          border-color: rgba(105, 229, 239, 0.95);
         }
 
-        .top-left    { left:0;  top:0;    border-top:4px solid; border-left:4px solid;   border-radius:14px 0 0 0; }
-        .top-right   { right:0; top:0;    border-top:4px solid; border-right:4px solid;  border-radius:0 14px 0 0; }
-        .bottom-left { left:0;  bottom:0; border-bottom:4px solid; border-left:4px solid;  border-radius:0 0 0 14px; }
-        .bottom-right{ right:0; bottom:0; border-bottom:4px solid; border-right:4px solid; border-radius:0 0 14px 0; }
+        .top-left {
+          left: 0;
+          top: 0;
+          border-top: 4px solid;
+          border-left: 4px solid;
+          border-radius: 14px 0 0 0;
+        }
+
+        .top-right {
+          right: 0;
+          top: 0;
+          border-top: 4px solid;
+          border-right: 4px solid;
+          border-radius: 0 14px 0 0;
+        }
+
+        .bottom-left {
+          left: 0;
+          bottom: 0;
+          border-bottom: 4px solid;
+          border-left: 4px solid;
+          border-radius: 0 0 0 14px;
+        }
+
+        .bottom-right {
+          right: 0;
+          bottom: 0;
+          border-bottom: 4px solid;
+          border-right: 4px solid;
+          border-radius: 0 0 14px 0;
+        }
 
         .guide-text {
           position: absolute;
-          left: 50%; bottom: -42px;
+          left: 50%;
+          bottom: -42px;
           transform: translateX(-50%);
           white-space: nowrap;
           padding: 9px 14px;
           border-radius: 999px;
-          background: rgba(0,0,0,0.58);
+          background: rgba(0, 0, 0, 0.58);
           backdrop-filter: blur(14px);
-          font-size: 13px; font-weight: 700;
+          font-size: 13px;
+          font-weight: 700;
         }
 
         .loading-toast {
           position: absolute;
           z-index: 9;
-          top: 50%; left: 50%;
+          top: 50%;
+          left: 50%;
           transform: translate(-50%, -50%);
           padding: 14px 20px;
           border-radius: 14px;
-          background: rgba(0,0,0,0.74);
+          background: rgba(0, 0, 0, 0.74);
           backdrop-filter: blur(16px);
-          font-size: 17px; font-weight: 800;
+          font-size: 17px;
+          font-weight: 800;
           white-space: nowrap;
         }
 
         .language-pill {
           position: absolute;
           z-index: 7;
-          left: 50%; bottom: 178px;
+          left: 50%;
+          bottom: 178px;
           transform: translateX(-50%);
-          display: flex; align-items: center; gap: 12px;
+          display: flex;
+          align-items: center;
+          gap: 12px;
           padding: 13px 20px;
           border-radius: 999px;
-          background: rgba(0,0,0,0.72);
+          background: rgba(0, 0, 0, 0.72);
           backdrop-filter: blur(18px);
-          font-size: 16px; font-weight: 800;
+          font-size: 16px;
+          font-weight: 800;
           white-space: nowrap;
         }
 
-        .language-pill span { color: #b7b3c9; }
+        .language-pill span {
+          color: #b7b3c9;
+        }
 
         .camera-controls {
           position: absolute;
           z-index: 7;
-          left: 0; right: 0; bottom: 82px;
+          left: 0;
+          right: 0;
+          bottom: 82px;
           display: flex;
-          justify-content: center; align-items: center;
+          justify-content: center;
+          align-items: center;
           gap: 62px;
         }
 
         .round-control {
-          width: 70px; height: 70px;
+          width: 70px;
+          height: 70px;
           border-radius: 999px;
           border: none;
-          background: rgba(255,255,255,0.13);
+          background: rgba(255, 255, 255, 0.13);
           backdrop-filter: blur(18px);
           color: #fff;
           font-size: 28px;
         }
 
         .shutter {
-          width: 96px; height: 96px;
+          width: 96px;
+          height: 96px;
           border-radius: 999px;
           border: none;
-          background: rgba(255,255,255,0.18);
-          display: flex; align-items: center; justify-content: center;
+          background: rgba(255, 255, 255, 0.18);
+          display: flex;
+          align-items: center;
+          justify-content: center;
           backdrop-filter: blur(18px);
         }
 
         .shutter span {
-          width: 62px; height: 62px;
+          width: 62px;
+          height: 62px;
           border-radius: 999px;
           background: #fff;
           display: block;
@@ -628,7 +874,9 @@ export default function Home() {
         .bottom-tabs {
           position: absolute;
           z-index: 7;
-          left: 0; right: 0; bottom: 18px;
+          left: 0;
+          right: 0;
+          bottom: 18px;
           display: grid;
           grid-template-columns: repeat(4, 1fr);
           padding: 0 18px;
@@ -637,34 +885,47 @@ export default function Home() {
         .bottom-tabs button {
           border: none;
           background: transparent;
-          color: rgba(255,255,255,0.58);
-          display: flex; flex-direction: column;
-          gap: 5px; align-items: center;
-          font-size: 13px; font-weight: 800;
+          color: rgba(255, 255, 255, 0.58);
+          display: flex;
+          flex-direction: column;
+          gap: 5px;
+          align-items: center;
+          font-size: 13px;
+          font-weight: 800;
         }
 
-        .bottom-tabs button span { font-size: 28px; }
-        .bottom-tabs button.active { color: #61dff3; }
+        .bottom-tabs button span {
+          font-size: 28px;
+        }
+
+        .bottom-tabs button.active {
+          color: #61dff3;
+        }
 
         .camera-fallback {
           position: absolute;
           z-index: 20;
           inset: 0;
           background: #111;
-          display: flex; flex-direction: column;
-          justify-content: center; align-items: center;
-          gap: 14px; color: #fff;
-          padding: 20px; text-align: center;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          align-items: center;
+          gap: 14px;
+          color: #fff;
+          padding: 20px;
+          text-align: center;
         }
 
         .camera-fallback button {
-          border: none; border-radius: 999px;
+          border: none;
+          border-radius: 999px;
           padding: 12px 18px;
-          background: #fff; color: #111;
+          background: #fff;
+          color: #111;
           font-weight: 900;
         }
 
-        /* ── 해설 화면 ── */
         .explain-screen {
           min-height: 100vh;
           background:
@@ -678,99 +939,49 @@ export default function Home() {
 
         .explain-header {
           display: flex;
-          justify-content: space-between; align-items: center;
+          justify-content: space-between;
+          align-items: center;
           margin-bottom: 18px;
         }
 
         .explain-header button {
-          width: 44px; height: 44px;
+          width: 44px;
+          height: 44px;
           border-radius: 999px;
           border: 1px solid #edeaf4;
-          background: rgba(255,255,255,0.9);
+          background: rgba(255, 255, 255, 0.9);
           color: #171729;
           font-size: 24px;
-          box-shadow: 0 8px 22px rgba(40,35,80,0.08);
+          box-shadow: 0 8px 22px rgba(40, 35, 80, 0.08);
         }
 
         .explain-title-mini {
           text-align: center;
-          font-weight: 900; font-size: 18px;
+          font-weight: 900;
+          font-size: 18px;
           letter-spacing: -0.04em;
         }
 
         .explain-sub-mini {
           text-align: center;
           margin-top: 3px;
-          font-size: 10px; color: #8c89a0;
+          font-size: 10px;
+          color: #8c89a0;
           letter-spacing: 0.1em;
           text-transform: uppercase;
         }
 
-        /* 확인 배너 */
-        .confirm-banner {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 10px;
-          padding: 14px 16px;
-          border-radius: 20px;
-          background: linear-gradient(135deg, #fffbe6, #fff7ed);
-          border: 1.5px solid #ffd97a;
+        .wrong-artwork-button {
+          width: 100%;
           margin-bottom: 16px;
-        }
-
-        .confirm-left {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          flex: 1;
-          min-width: 0;
-        }
-
-        .confirm-emoji { font-size: 24px; flex-shrink: 0; }
-
-        .confirm-q {
-          margin: 0 0 2px;
-          font-size: 12px;
-          color: #9a7c30;
-          font-weight: 700;
-        }
-
-        .confirm-name {
-          margin: 0;
+          border: 1px solid #e8e0ff;
+          border-radius: 18px;
+          padding: 14px 16px;
+          background: rgba(255, 255, 255, 0.92);
+          color: #7254e8;
           font-size: 15px;
           font-weight: 900;
-          color: #2e2a1a;
-          letter-spacing: -0.03em;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-
-        .confirm-name span { color: #7a6030; font-weight: 600; }
-
-        .confirm-btns {
-          display: flex;
-          gap: 7px;
-          flex-shrink: 0;
-        }
-
-        .confirm-yes {
-          border: none;
-          border-radius: 999px;
-          padding: 9px 14px;
-          background: #171729;
-          color: #fff;
-          font-size: 13px; font-weight: 900;
-        }
-
-        .confirm-no {
-          border: 1.5px solid #e0d0a0;
-          border-radius: 999px;
-          padding: 9px 14px;
-          background: #fff;
-          color: #7a6030;
-          font-size: 13px; font-weight: 800;
+          box-shadow: 0 10px 26px rgba(45, 35, 90, 0.08);
         }
 
         .artwork-hero {
@@ -778,29 +989,39 @@ export default function Home() {
           border-radius: 32px;
           background: linear-gradient(145deg, #ffffff, #f8f3ff);
           border: 1px solid #eeeaf8;
-          box-shadow: 0 18px 45px rgba(60,45,100,0.1);
+          box-shadow: 0 18px 45px rgba(60, 45, 100, 0.1);
         }
 
         .badge {
           display: inline-flex;
           padding: 8px 12px;
           border-radius: 999px;
-          background: #f0eaff; color: #7254e8;
-          font-size: 13px; font-weight: 900;
+          background: #f0eaff;
+          color: #7254e8;
+          font-size: 13px;
+          font-weight: 900;
         }
 
         .artwork-hero h1 {
           margin: 16px 0 10px;
-          font-size: 38px; line-height: 1.1;
+          font-size: 38px;
+          line-height: 1.1;
           letter-spacing: -0.07em;
         }
 
-        .artist-line { margin: 0; color: #625f73; font-size: 16px; line-height: 1.55; }
+        .artist-line {
+          margin: 0;
+          color: #625f73;
+          font-size: 16px;
+          line-height: 1.55;
+        }
 
         .summary {
           margin: 18px 0 0;
-          font-size: 19px; line-height: 1.55;
-          font-weight: 800; letter-spacing: -0.04em;
+          font-size: 19px;
+          line-height: 1.55;
+          font-weight: 800;
+          letter-spacing: -0.04em;
         }
 
         .detected-info-box,
@@ -808,192 +1029,252 @@ export default function Home() {
           margin-top: 18px;
           padding: 20px;
           border-radius: 28px;
-          background: rgba(255,255,255,0.94);
+          background: rgba(255, 255, 255, 0.94);
           border: 1px solid #eeeaf4;
-          box-shadow: 0 14px 35px rgba(40,35,80,0.07);
+          box-shadow: 0 14px 35px rgba(40, 35, 80, 0.07);
         }
 
         .section-title {
           margin-bottom: 12px;
           color: #7254e8;
-          font-size: 17px; font-weight: 900;
+          font-size: 17px;
+          font-weight: 900;
           letter-spacing: -0.04em;
         }
 
         .info-row {
           display: flex;
-          justify-content: space-between; align-items: flex-start;
+          justify-content: space-between;
+          align-items: flex-start;
           gap: 16px;
           padding: 13px 0;
           border-bottom: 1px solid #eeeaf4;
         }
 
-        .info-row:last-child { border-bottom: none; }
+        .info-row:last-child {
+          border-bottom: none;
+        }
 
-        .info-row span { color: #8a869c; font-size: 14px; font-weight: 800; flex-shrink: 0; }
-        .info-row strong { color: #171729; font-size: 15px; font-weight: 900; text-align: right; line-height: 1.4; }
-
-        .explain-card p { margin: 0; color: #444153; font-size: 16px; line-height: 1.75; }
-
-        .viewing-points { display: grid; gap: 12px; }
-
-        .viewing-point { display: flex; gap: 12px; align-items: flex-start; }
-
-        .viewing-point span {
-          width: 26px; height: 26px;
-          border-radius: 50%;
-          background: #efeaff; color: #7254e8;
-          display: flex; align-items: center; justify-content: center;
-          font-size: 13px; font-weight: 900;
+        .info-row span {
+          color: #8a869c;
+          font-size: 14px;
+          font-weight: 800;
           flex-shrink: 0;
         }
 
-        .viewing-point p { margin: 0; color: #444153; font-size: 16px; line-height: 1.65; }
+        .info-row strong {
+          color: #171729;
+          font-size: 15px;
+          font-weight: 900;
+          text-align: right;
+          line-height: 1.4;
+        }
+
+        .explain-card p {
+          margin: 0;
+          color: #444153;
+          font-size: 16px;
+          line-height: 1.75;
+        }
+
+        .viewing-points {
+          display: grid;
+          gap: 12px;
+        }
+
+        .viewing-point {
+          display: flex;
+          gap: 12px;
+          align-items: flex-start;
+        }
+
+        .viewing-point span {
+          width: 26px;
+          height: 26px;
+          border-radius: 50%;
+          background: #efeaff;
+          color: #7254e8;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 13px;
+          font-weight: 900;
+          flex-shrink: 0;
+        }
+
+        .viewing-point p {
+          margin: 0;
+          color: #444153;
+          font-size: 16px;
+          line-height: 1.65;
+        }
 
         .bottom-action-area {
           position: fixed;
-          left: 20px; right: 20px; bottom: 24px;
+          left: 20px;
+          right: 20px;
+          bottom: 24px;
           display: grid;
           grid-template-columns: 1fr 1fr;
           gap: 12px;
         }
 
-        .ghost-action, .primary-action {
+        .ghost-action,
+        .primary-action {
           border: none;
           border-radius: 22px;
           padding: 17px 14px;
-          font-size: 16px; font-weight: 900;
-          box-shadow: 0 14px 35px rgba(45,35,90,0.18);
-        }
-
-        .ghost-action { background: #fff; color: #7254e8; border: 1px solid #e8e0ff; }
-        .primary-action { background: linear-gradient(135deg, #7357ff, #bd43ff); color: #fff; }
-
-        /* ── 직접 입력 화면 ── */
-        .manual-screen {
-          min-height: 100vh;
-          background:
-            radial-gradient(circle at 20% 0%, #f4e8ff 0, transparent 30%),
-            radial-gradient(circle at 90% 0%, #defaff 0, transparent 26%),
-            #fbfbff;
-          color: #171729;
-          padding: 22px 22px 48px;
-          overflow-y: auto;
-          display: flex;
-          flex-direction: column;
-        }
-
-        .manual-header {
-          display: flex;
-          justify-content: space-between; align-items: center;
-          margin-bottom: 36px;
-        }
-
-        .manual-back {
-          width: 44px; height: 44px;
-          border-radius: 999px;
-          border: 1px solid #edeaf4;
-          background: rgba(255,255,255,0.9);
-          color: #171729;
-          font-size: 24px;
-          box-shadow: 0 8px 22px rgba(40,35,80,0.08);
-        }
-
-        .manual-body {
-          flex: 1;
-          display: flex;
-          flex-direction: column;
-        }
-
-        .manual-illust {
-          font-size: 64px;
-          text-align: center;
-          margin-bottom: 16px;
-        }
-
-        .manual-desc {
-          text-align: center;
           font-size: 16px;
-          line-height: 1.65;
-          color: #5a5670;
-          margin: 0 0 36px;
+          font-weight: 900;
+          box-shadow: 0 14px 35px rgba(45, 35, 90, 0.18);
         }
 
-        .input-label {
-          font-size: 13px; font-weight: 800;
-          color: #7254e8;
-          margin-bottom: 8px;
-          margin-top: 20px;
-        }
-
-        .input-label:first-of-type { margin-top: 0; }
-
-        .manual-input {
-          width: 100%;
-          border: 1.5px solid #e7e4ef;
-          border-radius: 16px;
-          padding: 16px 18px;
-          font-size: 16px;
-          font-family: inherit;
-          outline: none;
-          color: #171729;
+        .ghost-action {
           background: #fff;
-          transition: border-color 0.15s;
+          color: #7254e8;
+          border: 1px solid #e8e0ff;
         }
 
-        .manual-input:focus { border-color: #7254e8; }
-
-        .manual-submit {
-          margin-top: 32px;
-          width: 100%;
-          border: none;
-          border-radius: 22px;
-          padding: 20px;
-          font-size: 17px; font-weight: 900;
+        .primary-action {
           background: linear-gradient(135deg, #7357ff, #bd43ff);
           color: #fff;
-          box-shadow: 0 14px 35px rgba(45,35,90,0.22);
-          transition: opacity 0.15s;
+        }
+
+        .correction-overlay {
+          position: fixed;
+          z-index: 50;
+          inset: 0;
+          background: rgba(0, 0, 0, 0.42);
+          backdrop-filter: blur(8px);
           display: flex;
           align-items: center;
           justify-content: center;
-          min-height: 62px;
+          padding: 22px;
         }
 
-        .manual-submit:disabled { opacity: 0.4; cursor: not-allowed; }
-
-        /* 버튼 내 로딩 점 */
-        .btn-loading {
-          display: flex; gap: 6px; align-items: center;
+        .correction-modal {
+          width: 100%;
+          max-width: 390px;
+          border-radius: 30px;
+          background: #ffffff;
+          color: #171729;
+          padding: 22px;
+          box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
         }
 
-        .btn-loading span {
-          width: 8px; height: 8px;
-          border-radius: 50%;
-          background: rgba(255,255,255,0.9);
-          animation: bounce 1.2s infinite ease-in-out;
+        .correction-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 12px;
         }
 
-        .btn-loading span:nth-child(2) { animation-delay: 0.2s; }
-        .btn-loading span:nth-child(3) { animation-delay: 0.4s; }
+        .correction-header h3 {
+          margin: 0;
+          font-size: 22px;
+          font-weight: 900;
+          letter-spacing: -0.04em;
+        }
 
-        /* ── 채팅 시트 ── */
+        .correction-header p {
+          margin: 8px 0 0;
+          color: #777184;
+          font-size: 13px;
+          line-height: 1.55;
+        }
+
+        .correction-header button {
+          width: 36px;
+          height: 36px;
+          border: none;
+          border-radius: 999px;
+          background: #f1eff7;
+          color: #171729;
+          font-size: 22px;
+          flex-shrink: 0;
+        }
+
+        .correction-form {
+          display: grid;
+          gap: 14px;
+          margin-top: 22px;
+        }
+
+        .correction-form label {
+          display: grid;
+          gap: 8px;
+          color: #444153;
+          font-size: 14px;
+          font-weight: 900;
+        }
+
+        .correction-form input {
+          width: 100%;
+          border: 1px solid #e7e4ef;
+          border-radius: 17px;
+          padding: 14px;
+          outline: none;
+          color: #171729;
+          background: #fbfaff;
+          font-size: 15px;
+        }
+
+        .correction-form input:focus {
+          border-color: #8b6cff;
+          box-shadow: 0 0 0 3px rgba(139, 108, 255, 0.12);
+        }
+
+        .correction-actions {
+          display: grid;
+          grid-template-columns: 0.8fr 1.4fr;
+          gap: 10px;
+          margin-top: 22px;
+        }
+
+        .cancel-correction,
+        .submit-correction {
+          border: none;
+          border-radius: 18px;
+          padding: 15px 12px;
+          font-size: 14px;
+          font-weight: 900;
+        }
+
+        .cancel-correction {
+          background: #f3f1fb;
+          color: #555166;
+        }
+
+        .submit-correction {
+          background: linear-gradient(135deg, #7357ff, #bd43ff);
+          color: #fff;
+        }
+
+        .submit-correction:disabled {
+          opacity: 0.65;
+          cursor: not-allowed;
+        }
+
         .chat-sheet {
           position: fixed;
           z-index: 30;
-          left: 0; right: 0; bottom: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
           height: 58vh;
           padding: 12px 20px 24px;
           border-radius: 30px 30px 0 0;
-          background: rgba(255,255,255,0.96);
+          background: rgba(255, 255, 255, 0.96);
           color: #171729;
           backdrop-filter: blur(20px);
-          box-shadow: 0 -20px 50px rgba(0,0,0,0.24);
-          display: flex; flex-direction: column;
+          box-shadow: 0 -20px 50px rgba(0, 0, 0, 0.24);
+          display: flex;
+          flex-direction: column;
         }
 
         .sheet-handle {
-          width: 46px; height: 5px;
+          width: 46px;
+          height: 5px;
           border-radius: 999px;
           background: #d5d2df;
           margin: 0 auto 14px;
@@ -1001,15 +1282,26 @@ export default function Home() {
 
         .sheet-header {
           display: flex;
-          justify-content: space-between; align-items: flex-start;
+          justify-content: space-between;
+          align-items: flex-start;
           gap: 12px;
         }
 
-        .sheet-header h3 { margin: 0; font-size: 22px; letter-spacing: -0.04em; }
-        .sheet-header p { margin: 5px 0 0; color: #777184; font-size: 13px; }
+        .sheet-header h3 {
+          margin: 0;
+          font-size: 22px;
+          letter-spacing: -0.04em;
+        }
+
+        .sheet-header p {
+          margin: 5px 0 0;
+          color: #777184;
+          font-size: 13px;
+        }
 
         .sheet-header button {
-          width: 36px; height: 36px;
+          width: 36px;
+          height: 36px;
           border-radius: 999px;
           border: none;
           background: #f1eff7;
@@ -1020,43 +1312,37 @@ export default function Home() {
           flex: 1;
           overflow-y: auto;
           margin-top: 18px;
-          display: flex; flex-direction: column;
+          display: flex;
+          flex-direction: column;
           gap: 10px;
-          padding-bottom: 4px;
         }
 
         .bubble {
           max-width: 84%;
           padding: 13px 15px;
           border-radius: 18px;
-          font-size: 14px; line-height: 1.55;
+          font-size: 14px;
+          line-height: 1.55;
         }
 
-        .bubble.ai { background: #f3f1fb; color: #333044; border-top-left-radius: 6px; }
-        .bubble.user { align-self: flex-end; background: #171729; color: #fff; border-top-right-radius: 6px; }
-
-        .loading-bubble {
-          display: flex; align-items: center; gap: 5px;
-          padding: 16px 18px;
-          width: fit-content;
+        .bubble.ai {
+          background: #f3f1fb;
+          color: #333044;
+          border-top-left-radius: 6px;
         }
 
-        .loading-bubble span {
-          width: 7px; height: 7px;
-          border-radius: 50%;
-          background: #9b8fc7;
-          animation: bounce 1.2s infinite ease-in-out;
+        .bubble.user {
+          align-self: flex-end;
+          background: #171729;
+          color: #fff;
+          border-top-right-radius: 6px;
         }
 
-        .loading-bubble span:nth-child(2) { animation-delay: 0.2s; }
-        .loading-bubble span:nth-child(3) { animation-delay: 0.4s; }
-
-        @keyframes bounce {
-          0%, 80%, 100% { transform: translateY(0); opacity: 0.5; }
-          40%            { transform: translateY(-6px); opacity: 1; }
+        .question-box {
+          display: flex;
+          gap: 8px;
+          margin-top: 14px;
         }
-
-        .question-box { display: flex; gap: 8px; margin-top: 14px; }
 
         .question-box input {
           flex: 1;
@@ -1065,46 +1351,53 @@ export default function Home() {
           padding: 14px;
           outline: none;
           font-size: 15px;
-          font-family: inherit;
         }
-
-        .question-box input:disabled { background: #f7f5fc; color: #aaa; }
 
         .question-box button {
           width: 50px;
           border-radius: 18px;
           border: none;
-          background: #7d55ea; color: #fff;
-          font-size: 20px; font-weight: 900;
-          transition: opacity 0.15s;
+          background: #7d55ea;
+          color: #fff;
+          font-size: 20px;
+          font-weight: 900;
         }
 
-        .question-box button:disabled { opacity: 0.45; cursor: not-allowed; }
-
-        /* ── 데스크탑 ── */
         @media (min-width: 700px) {
           .app,
           .camera-screen,
-          .explain-screen,
-          .manual-screen {
+          .explain-screen {
             width: 430px;
-            height: 860px; min-height: 860px;
+            height: 860px;
+            min-height: 860px;
             margin: 24px auto;
             border-radius: 42px;
             border: 8px solid #111;
             overflow: hidden;
-            box-shadow: 0 24px 70px rgba(0,0,0,0.35);
+            box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
           }
 
           .chat-sheet {
-            left: 50%; right: auto;
+            left: 50%;
+            right: auto;
             width: 430px;
             transform: translateX(-50%);
             bottom: 24px;
             border-radius: 30px;
           }
 
-          body { background: #eef8f9; }
+          .correction-overlay {
+            left: 50%;
+            right: auto;
+            width: 430px;
+            transform: translateX(-50%);
+            margin: 24px auto;
+            border-radius: 42px;
+          }
+
+          body {
+            background: #eef8f9;
+          }
         }
       `}</style>
     </main>
