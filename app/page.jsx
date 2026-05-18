@@ -9,7 +9,7 @@ export default function Home() {
   const streamRef = useRef(null);
   const chatEndRef = useRef(null);
 
-  const [screen, setScreen] = useState("camera");
+  const [screen, setScreen] = useState("camera"); // "camera" | "explain" | "manual"
   const [mode, setMode] = useState("camera");
 
   const [cameraOn, setCameraOn] = useState(false);
@@ -24,16 +24,11 @@ export default function Home() {
   const [question, setQuestion] = useState("");
   const [chat, setChat] = useState([]);
 
-  // 직접 입력 모달
-  const [manualOpen, setManualOpen] = useState(false);
+  const [confirmVisible, setConfirmVisible] = useState(true);
+
   const [manualTitle, setManualTitle] = useState("");
   const [manualArtist, setManualArtist] = useState("");
   const [manualLoading, setManualLoading] = useState(false);
-
-  // explain 화면에서 정보 수정
-  const [editOpen, setEditOpen] = useState(false);
-  const [editTitle, setEditTitle] = useState("");
-  const [editArtist, setEditArtist] = useState("");
 
   const userProfile = {
     level: "미술 입문자",
@@ -76,27 +71,24 @@ export default function Home() {
 
   const stopCamera = () => {
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
     setCameraOn(false);
   };
 
-  const fetchArtworkInfo = async (ocrTextInput) => {
+  const fetchArtworkInfo = async (text) => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
-
-    const response = await fetch("/api/explain", {
+    const res = await fetch("/api/explain", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ocrText: ocrTextInput, userProfile }),
+      body: JSON.stringify({ ocrText: text, userProfile }),
       signal: controller.signal,
     });
-
     clearTimeout(timeoutId);
-
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "AI 해설 생성에 실패했습니다.");
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "AI 해설 생성에 실패했습니다.");
     return data;
   };
 
@@ -108,11 +100,11 @@ export default function Home() {
     setOcrText("");
     setArtwork(null);
     setChat([]);
+    setConfirmVisible(true);
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
-
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -121,11 +113,10 @@ export default function Home() {
       const result = await Tesseract.recognize(canvas, "eng+kor+fra+jpn", {
         logger: (m) => console.log(m),
       });
-
       const text = result.data.text.trim();
 
       if (!text || text.length < 3) {
-        alert("캡션 글자가 잘 인식되지 않았습니다. 더 가까이 촬영하거나 직접 입력해보세요.");
+        alert("캡션 글자가 잘 인식되지 않았습니다. 더 가까이 촬영해주세요.");
         return;
       }
 
@@ -134,21 +125,18 @@ export default function Home() {
       setAiLoading(true);
 
       const data = await fetchArtworkInfo(text);
-
       setArtwork(data);
-      setChat([
-        {
-          role: "ai",
-          text: `OCR 캡션을 바탕으로 「${data.title}」 작품 정보를 분석했어요. 분석 신뢰도는 ${data.confidence}입니다. 궁금한 점이 있으면 질문해보세요!`,
-        },
-      ]);
+      setChat([{
+        role: "ai",
+        text: `「${data.title}」 작품 정보를 분석했어요. 분석 신뢰도는 ${data.confidence}입니다. 궁금한 점이 있으면 질문해보세요!`,
+      }]);
       setScreen("explain");
     } catch (error) {
       console.error(error);
       if (error.name === "AbortError") {
-        alert("AI 해설 생성 시간이 너무 오래 걸립니다. 잠시 후 다시 시도해주세요.");
+        alert("시간이 너무 오래 걸립니다. 잠시 후 다시 시도해주세요.");
       } else {
-        alert(error.message || "OCR 또는 AI 해설 생성 중 오류가 발생했습니다.");
+        alert(error.message || "오류가 발생했습니다.");
       }
     } finally {
       setOcrLoading(false);
@@ -156,7 +144,7 @@ export default function Home() {
     }
   };
 
-  // 직접 입력으로 해설 생성
+  // 직접 입력 후 해설 재생성
   const submitManual = async () => {
     if (!manualTitle.trim() && !manualArtist.trim()) {
       alert("작품명 또는 작가명을 입력해주세요.");
@@ -168,112 +156,51 @@ export default function Home() {
     const synthesized = [
       manualTitle.trim() && `작품명: ${manualTitle.trim()}`,
       manualArtist.trim() && `작가명: ${manualArtist.trim()}`,
-    ]
-      .filter(Boolean)
-      .join("\n");
+    ].filter(Boolean).join("\n");
 
     try {
-      setAiLoading(true);
       const data = await fetchArtworkInfo(synthesized);
-
       setOcrText(synthesized);
       setArtwork(data);
-      setChat([
-        {
-          role: "ai",
-          text: `「${data.title}」 작품 정보를 분석했어요. 분석 신뢰도는 ${data.confidence}입니다. 궁금한 점이 있으면 질문해보세요!`,
-        },
-      ]);
-      setManualOpen(false);
+      setChat([{
+        role: "ai",
+        text: `「${data.title}」 작품 정보를 새로 분석했어요. 분석 신뢰도는 ${data.confidence}입니다.`,
+      }]);
+      setConfirmVisible(false);
       setManualTitle("");
       setManualArtist("");
       setScreen("explain");
     } catch (error) {
       console.error(error);
-      alert(error.message || "AI 해설 생성 중 오류가 발생했습니다.");
+      alert(error.message || "해설 생성 중 오류가 발생했습니다.");
     } finally {
       setManualLoading(false);
-      setAiLoading(false);
-    }
-  };
-
-  // explain 화면에서 정보 수정 후 재검색
-  const submitEdit = async () => {
-    if (!editTitle.trim() && !editArtist.trim()) {
-      alert("작품명 또는 작가명을 입력해주세요.");
-      return;
-    }
-
-    setEditOpen(false);
-    setAiLoading(true);
-
-    const synthesized = [
-      editTitle.trim() && `작품명: ${editTitle.trim()}`,
-      editArtist.trim() && `작가명: ${editArtist.trim()}`,
-    ]
-      .filter(Boolean)
-      .join("\n");
-
-    try {
-      const data = await fetchArtworkInfo(synthesized);
-
-      setOcrText(synthesized);
-      setArtwork(data);
-      setChat([
-        {
-          role: "ai",
-          text: `「${data.title}」 작품 정보를 다시 분석했어요. 분석 신뢰도는 ${data.confidence}입니다.`,
-        },
-      ]);
-    } catch (error) {
-      console.error(error);
-      alert(error.message || "AI 해설 생성 중 오류가 발생했습니다.");
-    } finally {
-      setAiLoading(false);
     }
   };
 
   const askQuestion = async () => {
     const trimmed = question.trim();
     if (!trimmed || chatLoading) return;
-
-    if (!ocrText) {
-      alert("먼저 작품 캡션을 인식해주세요.");
-      return;
-    }
+    if (!ocrText) { alert("먼저 작품 캡션을 인식해주세요."); return; }
 
     const userMessage = { role: "user", text: trimmed };
     const nextChat = [...chat, userMessage];
-
     setChat(nextChat);
     setQuestion("");
     setChatLoading(true);
 
     try {
-      const response = await fetch("/api/chat", {
+      const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ocrText,
-          userProfile,
-          question: trimmed,
-          chatHistory: nextChat,
-        }),
+        body: JSON.stringify({ ocrText, userProfile, question: trimmed, chatHistory: nextChat }),
       });
-
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "질문 답변 생성에 실패했습니다.");
-
-      setChat((prev) => [
-        ...prev,
-        { role: "ai", text: data.answer || "답변을 생성하지 못했습니다." },
-      ]);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "답변 생성에 실패했습니다.");
+      setChat((prev) => [...prev, { role: "ai", text: data.answer || "답변을 생성하지 못했습니다." }]);
     } catch (error) {
       console.error(error);
-      setChat((prev) => [
-        ...prev,
-        { role: "ai", text: "질문에 답변하는 중 오류가 발생했습니다. 다시 시도해주세요." },
-      ]);
+      setChat((prev) => [...prev, { role: "ai", text: "오류가 발생했습니다. 다시 시도해주세요." }]);
     } finally {
       setChatLoading(false);
     }
@@ -281,6 +208,8 @@ export default function Home() {
 
   return (
     <main className="app">
+
+      {/* ── 카메라 ── */}
       {screen === "camera" && (
         <section className="camera-screen">
           <video ref={videoRef} className="camera-video" playsInline muted autoPlay />
@@ -295,10 +224,7 @@ export default function Home() {
 
           <div className="top-bar">
             <button className="icon-btn">‹</button>
-            <div className="app-pill">
-              <span className="app-dot" />
-              Clartity
-            </div>
+            <div className="app-pill"><span className="app-dot" />Clartity</div>
             <button className="icon-btn">?</button>
           </div>
 
@@ -311,47 +237,28 @@ export default function Home() {
           </div>
 
           {ocrLoading && <div className="loading-toast">캡션 글자를 읽는 중입니다...</div>}
-          {aiLoading && <div className="loading-toast">작품 해설을 생성 중입니다...</div>}
+          {aiLoading  && <div className="loading-toast">작품 해설을 생성 중입니다...</div>}
 
           <div className="language-pill">
-            캡션 인식 <span>⌄</span>
-            <b>→</b>
-            맞춤 해설 <span>⌄</span>
+            캡션 인식 <span>⌄</span><b>→</b>맞춤 해설 <span>⌄</span>
           </div>
 
           <div className="camera-controls">
             <button className="round-control">▧</button>
-            <button className="shutter" onClick={captureAndOCR}>
-              <span />
-            </button>
+            <button className="shutter" onClick={captureAndOCR}><span /></button>
             <button className="round-control">⌁</button>
           </div>
 
-          {/* 직접 입력 버튼 */}
-          <button className="manual-entry-btn" onClick={() => setManualOpen(true)}>
-            ✏️ 직접 입력
-          </button>
-
           <nav className="bottom-tabs">
-            <button className={mode === "translate" ? "active" : ""} onClick={() => setMode("translate")}>
-              <span>▣</span>번역
-            </button>
-            <button className={mode === "camera" ? "active" : ""} onClick={() => setMode("camera")}>
-              <span>●</span>카메라
-            </button>
-            <button
-              className={mode === "chat" ? "active" : ""}
-              onClick={() => { setMode("chat"); setQuestionOpen(true); }}
-            >
-              <span>👥</span>대화
-            </button>
-            <button className={mode === "save" ? "active" : ""} onClick={() => setMode("save")}>
-              <span>★</span>저장
-            </button>
+            <button className={mode === "translate" ? "active" : ""} onClick={() => setMode("translate")}><span>▣</span>번역</button>
+            <button className={mode === "camera"    ? "active" : ""} onClick={() => setMode("camera")}><span>●</span>카메라</button>
+            <button className={mode === "chat"      ? "active" : ""} onClick={() => { setMode("chat"); setQuestionOpen(true); }}><span>👥</span>대화</button>
+            <button className={mode === "save"      ? "active" : ""} onClick={() => setMode("save")}><span>★</span>저장</button>
           </nav>
         </section>
       )}
 
+      {/* ── 해설 화면 ── */}
       {screen === "explain" && artwork && (
         <section className="explain-screen">
           <header className="explain-header">
@@ -363,94 +270,80 @@ export default function Home() {
             <button onClick={() => setQuestionOpen(true)}>?</button>
           </header>
 
-          {aiLoading && (
-            <div className="inline-loading">
-              <div className="inline-loading-dots">
-                <span /><span /><span />
+          {/* 작품 확인 배너 */}
+          {confirmVisible && (
+            <div className="confirm-banner">
+              <div className="confirm-left">
+                <span className="confirm-emoji">🖼️</span>
+                <div>
+                  <p className="confirm-q">혹시 이 작품이 맞나요?</p>
+                  <p className="confirm-name">
+                    {artwork.title}
+                    {artwork.artist !== "확인 필요" && <span> · {artwork.artist}</span>}
+                  </p>
+                </div>
               </div>
-              <p>작품 해설을 다시 생성 중입니다...</p>
+              <div className="confirm-btns">
+                <button className="confirm-yes" onClick={() => setConfirmVisible(false)}>맞아요</button>
+                <button className="confirm-no" onClick={() => {
+                  setManualTitle("");
+                  setManualArtist("");
+                  setScreen("manual");
+                }}>아니에요</button>
+              </div>
             </div>
           )}
 
-          {!aiLoading && (
-            <>
-              <section className="artwork-hero">
-                <div className="badge">✨ 분석 신뢰도 {artwork.confidence}</div>
-                <h1>{artwork.title}</h1>
-                <p className="artist-line">
-                  <b>{artwork.artist}</b>
-                  <br />
-                  {artwork.museum} · {artwork.year}
-                </p>
-                <p className="summary">{artwork.summary}</p>
-              </section>
+          <section className="artwork-hero">
+            <div className="badge">✨ 분석 신뢰도 {artwork.confidence}</div>
+            <h1>{artwork.title}</h1>
+            <p className="artist-line">
+              <b>{artwork.artist}</b><br />
+              {artwork.museum} · {artwork.year}
+            </p>
+            <p className="summary">{artwork.summary}</p>
+          </section>
 
-              <section className="detected-info-box">
-                <div className="section-title-row">
-                  <div className="section-title">인식된 작품 정보</div>
-                  <button
-                    className="edit-btn"
-                    onClick={() => {
-                      setEditTitle(artwork.title === "확인 필요" ? "" : artwork.title);
-                      setEditArtist(artwork.artist === "확인 필요" ? "" : artwork.artist);
-                      setEditOpen(true);
-                    }}
-                  >
-                    ✏️ 수정
-                  </button>
-                </div>
-                <div className="info-row">
-                  <span>작품명</span>
-                  <strong>{artwork.title || "작품명 정보가 명확하지 않습니다"}</strong>
-                </div>
-                <div className="info-row">
-                  <span>작가</span>
-                  <strong>{artwork.artist || "작가 정보가 명확하지 않습니다"}</strong>
-                </div>
-                <div className="info-row">
-                  <span>제작연도</span>
-                  <strong>{artwork.year || "제작연도 정보가 명확하지 않습니다"}</strong>
-                </div>
-                <div className="info-row">
-                  <span>소장처</span>
-                  <strong>{artwork.museum || "소장처 정보가 명확하지 않습니다"}</strong>
-                </div>
-              </section>
+          <section className="detected-info-box">
+            <div className="section-title">인식된 작품 정보</div>
+            <div className="info-row"><span>작품명</span><strong>{artwork.title || "확인 필요"}</strong></div>
+            <div className="info-row"><span>작가</span><strong>{artwork.artist || "확인 필요"}</strong></div>
+            <div className="info-row"><span>제작연도</span><strong>{artwork.year || "확인 필요"}</strong></div>
+            <div className="info-row"><span>소장처</span><strong>{artwork.museum || "확인 필요"}</strong></div>
+          </section>
 
-              <section className="explain-card">
-                <div className="section-title">간단한 작품 해설</div>
-                <p>{artwork.simpleExplanation || artwork.explanation || "작품 해설을 생성하지 못했습니다."}</p>
-              </section>
+          <section className="explain-card">
+            <div className="section-title">간단한 작품 해설</div>
+            <p>{artwork.simpleExplanation || artwork.explanation || "작품 해설을 생성하지 못했습니다."}</p>
+          </section>
 
-              <section className="explain-card">
-                <div className="section-title">작가 설명</div>
-                <p>{artwork.artistDescription || "작가 정보는 추가 확인이 필요합니다."}</p>
-              </section>
+          <section className="explain-card">
+            <div className="section-title">작가 설명</div>
+            <p>{artwork.artistDescription || "추가 확인이 필요합니다."}</p>
+          </section>
 
-              <section className="explain-card">
-                <div className="section-title">작가의 의도</div>
-                <p>{artwork.artistIntention || "작가의 의도는 추가 확인이 필요합니다."}</p>
-              </section>
+          <section className="explain-card">
+            <div className="section-title">작가의 의도</div>
+            <p>{artwork.artistIntention || "추가 확인이 필요합니다."}</p>
+          </section>
 
-              <section className="explain-card">
-                <div className="section-title">배경 설명</div>
-                <p>{artwork.background || "작품의 시대적·전시적 배경은 추가 확인이 필요합니다."}</p>
-              </section>
+          <section className="explain-card">
+            <div className="section-title">배경 설명</div>
+            <p>{artwork.background || "추가 확인이 필요합니다."}</p>
+          </section>
 
-              {artwork.viewingPoints?.length > 0 && (
-                <section className="explain-card">
-                  <div className="section-title">감상 포인트</div>
-                  <div className="viewing-points">
-                    {artwork.viewingPoints.map((point, index) => (
-                      <div key={index} className="viewing-point">
-                        <span>{index + 1}</span>
-                        <p>{point}</p>
-                      </div>
-                    ))}
+          {artwork.viewingPoints?.length > 0 && (
+            <section className="explain-card">
+              <div className="section-title">감상 포인트</div>
+              <div className="viewing-points">
+                {artwork.viewingPoints.map((point, i) => (
+                  <div key={i} className="viewing-point">
+                    <span>{i + 1}</span>
+                    <p>{point}</p>
                   </div>
-                </section>
-              )}
-            </>
+                ))}
+              </div>
+            </section>
           )}
 
           <div className="bottom-action-area">
@@ -460,92 +353,57 @@ export default function Home() {
         </section>
       )}
 
-      {/* 직접 입력 모달 (카메라 화면) */}
-      {manualOpen && (
-        <div className="modal-backdrop" onClick={() => setManualOpen(false)}>
-          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="sheet-handle" />
-            <div className="modal-header">
-              <div>
-                <h3>직접 입력</h3>
-                <p>작품명이나 작가명을 입력해주세요.</p>
-              </div>
-              <button onClick={() => setManualOpen(false)}>×</button>
+      {/* ── 직접 입력 화면 ── */}
+      {screen === "manual" && (
+        <section className="manual-screen">
+          <header className="manual-header">
+            <button className="manual-back" onClick={() => setScreen("explain")}>‹</button>
+            <div>
+              <div className="explain-title-mini">작품 직접 입력</div>
+              <div className="explain-sub-mini">알고 있는 정보로 다시 검색</div>
             </div>
+            <div style={{ width: 44 }} />
+          </header>
 
-            <div className="modal-body">
-              <label className="input-label">작품명</label>
-              <input
-                className="modal-input"
-                value={manualTitle}
-                onChange={(e) => setManualTitle(e.target.value)}
-                placeholder="예: 별이 빛나는 밤"
-                onKeyDown={(e) => { if (e.key === "Enter") submitManual(); }}
-              />
-              <label className="input-label">작가명</label>
-              <input
-                className="modal-input"
-                value={manualArtist}
-                onChange={(e) => setManualArtist(e.target.value)}
-                placeholder="예: 빈센트 반 고흐"
-                onKeyDown={(e) => { if (e.key === "Enter") submitManual(); }}
-              />
-            </div>
+          <div className="manual-body">
+            <div className="manual-illust">🎨</div>
+            <p className="manual-desc">
+              작품명이나 작가명을 입력하면<br />
+              정확한 해설을 다시 찾아드릴게요.
+            </p>
+
+            <label className="input-label">작품명</label>
+            <input
+              className="manual-input"
+              value={manualTitle}
+              onChange={(e) => setManualTitle(e.target.value)}
+              placeholder="예: 별이 빛나는 밤"
+              onKeyDown={(e) => { if (e.key === "Enter") submitManual(); }}
+            />
+
+            <label className="input-label">작가명</label>
+            <input
+              className="manual-input"
+              value={manualArtist}
+              onChange={(e) => setManualArtist(e.target.value)}
+              placeholder="예: 빈센트 반 고흐"
+              onKeyDown={(e) => { if (e.key === "Enter") submitManual(); }}
+            />
 
             <button
-              className="modal-submit"
+              className="manual-submit"
               onClick={submitManual}
               disabled={manualLoading || (!manualTitle.trim() && !manualArtist.trim())}
             >
-              {manualLoading ? "해설 생성 중..." : "해설 생성하기"}
+              {manualLoading
+                ? <span className="btn-loading"><span /><span /><span /></span>
+                : "이 작품으로 해설 보기"}
             </button>
           </div>
-        </div>
+        </section>
       )}
 
-      {/* 수정 모달 (explain 화면) */}
-      {editOpen && (
-        <div className="modal-backdrop" onClick={() => setEditOpen(false)}>
-          <div className="modal-sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="sheet-handle" />
-            <div className="modal-header">
-              <div>
-                <h3>작품 정보 수정</h3>
-                <p>올바른 정보를 입력하면 해설을 다시 생성해요.</p>
-              </div>
-              <button onClick={() => setEditOpen(false)}>×</button>
-            </div>
-
-            <div className="modal-body">
-              <label className="input-label">작품명</label>
-              <input
-                className="modal-input"
-                value={editTitle}
-                onChange={(e) => setEditTitle(e.target.value)}
-                placeholder="예: 별이 빛나는 밤"
-                onKeyDown={(e) => { if (e.key === "Enter") submitEdit(); }}
-              />
-              <label className="input-label">작가명</label>
-              <input
-                className="modal-input"
-                value={editArtist}
-                onChange={(e) => setEditArtist(e.target.value)}
-                placeholder="예: 빈센트 반 고흐"
-                onKeyDown={(e) => { if (e.key === "Enter") submitEdit(); }}
-              />
-            </div>
-
-            <button
-              className="modal-submit"
-              onClick={submitEdit}
-              disabled={!editTitle.trim() && !editArtist.trim()}
-            >
-              다시 검색하기
-            </button>
-          </div>
-        </div>
-      )}
-
+      {/* ── 채팅 시트 ── */}
       {questionOpen && (
         <div className="chat-sheet">
           <div className="sheet-handle" />
@@ -559,17 +417,13 @@ export default function Home() {
 
           <div className="chat-list">
             {chat.length === 0 && (
-              <div className="bubble ai">
-                먼저 작품 캡션을 촬영하면 해당 작품에 대해 질문할 수 있어요.
-              </div>
+              <div className="bubble ai">먼저 작품 캡션을 촬영하면 해당 작품에 대해 질문할 수 있어요.</div>
             )}
             {chat.map((m, i) => (
               <div key={i} className={`bubble ${m.role}`}>{m.text}</div>
             ))}
             {chatLoading && (
-              <div className="bubble ai loading-bubble">
-                <span /><span /><span />
-              </div>
+              <div className="bubble ai loading-bubble"><span /><span /><span /></div>
             )}
             <div ref={chatEndRef} />
           </div>
@@ -580,12 +434,7 @@ export default function Home() {
               onChange={(e) => setQuestion(e.target.value)}
               placeholder="예: 이 작품은 왜 유명해?"
               disabled={chatLoading}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  askQuestion();
-                }
-              }}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); askQuestion(); } }}
             />
             <button onClick={askQuestion} disabled={chatLoading || !question.trim()}>
               {chatLoading ? "…" : "↑"}
@@ -638,10 +487,8 @@ export default function Home() {
           inset: 0;
           background: linear-gradient(
             to bottom,
-            rgba(0,0,0,0.48) 0%,
-            rgba(0,0,0,0.08) 28%,
-            rgba(0,0,0,0.04) 52%,
-            rgba(0,0,0,0.76) 100%
+            rgba(0,0,0,0.48) 0%, rgba(0,0,0,0.08) 28%,
+            rgba(0,0,0,0.04) 52%, rgba(0,0,0,0.76) 100%
           );
           pointer-events: none;
         }
@@ -649,17 +496,14 @@ export default function Home() {
         .top-bar {
           position: absolute;
           z-index: 5;
-          top: 22px;
-          left: 18px;
-          right: 18px;
+          top: 22px; left: 18px; right: 18px;
           display: flex;
           align-items: center;
           justify-content: space-between;
         }
 
         .icon-btn {
-          width: 44px;
-          height: 44px;
+          width: 44px; height: 44px;
           border-radius: 999px;
           border: none;
           background: rgba(255,255,255,0.14);
@@ -669,9 +513,7 @@ export default function Home() {
         }
 
         .app-pill {
-          display: flex;
-          align-items: center;
-          gap: 8px;
+          display: flex; align-items: center; gap: 8px;
           padding: 10px 18px;
           border-radius: 999px;
           background: rgba(0,0,0,0.58);
@@ -681,8 +523,7 @@ export default function Home() {
         }
 
         .app-dot {
-          width: 8px;
-          height: 8px;
+          width: 8px; height: 8px;
           background: #4ee6c0;
           border-radius: 50%;
           box-shadow: 0 0 12px #4ee6c0;
@@ -691,8 +532,7 @@ export default function Home() {
         .scan-guide {
           position: absolute;
           z-index: 3;
-          left: 34px;
-          right: 34px;
+          left: 34px; right: 34px;
           top: 25%;
           height: 210px;
           pointer-events: none;
@@ -700,60 +540,51 @@ export default function Home() {
 
         .corner {
           position: absolute;
-          width: 42px;
-          height: 42px;
+          width: 42px; height: 42px;
           border-color: rgba(105,229,239,0.95);
         }
 
-        .top-left    { left: 0;  top: 0;    border-top: 4px solid; border-left: 4px solid;   border-radius: 14px 0 0 0; }
-        .top-right   { right: 0; top: 0;    border-top: 4px solid; border-right: 4px solid;  border-radius: 0 14px 0 0; }
-        .bottom-left { left: 0;  bottom: 0; border-bottom: 4px solid; border-left: 4px solid;  border-radius: 0 0 0 14px; }
-        .bottom-right{ right: 0; bottom: 0; border-bottom: 4px solid; border-right: 4px solid; border-radius: 0 0 14px 0; }
+        .top-left    { left:0;  top:0;    border-top:4px solid; border-left:4px solid;   border-radius:14px 0 0 0; }
+        .top-right   { right:0; top:0;    border-top:4px solid; border-right:4px solid;  border-radius:0 14px 0 0; }
+        .bottom-left { left:0;  bottom:0; border-bottom:4px solid; border-left:4px solid;  border-radius:0 0 0 14px; }
+        .bottom-right{ right:0; bottom:0; border-bottom:4px solid; border-right:4px solid; border-radius:0 0 14px 0; }
 
         .guide-text {
           position: absolute;
-          left: 50%;
-          bottom: -42px;
+          left: 50%; bottom: -42px;
           transform: translateX(-50%);
           white-space: nowrap;
           padding: 9px 14px;
           border-radius: 999px;
           background: rgba(0,0,0,0.58);
           backdrop-filter: blur(14px);
-          font-size: 13px;
-          font-weight: 700;
+          font-size: 13px; font-weight: 700;
         }
 
         .loading-toast {
           position: absolute;
           z-index: 9;
-          top: 50%;
-          left: 50%;
+          top: 50%; left: 50%;
           transform: translate(-50%, -50%);
           padding: 14px 20px;
           border-radius: 14px;
           background: rgba(0,0,0,0.74);
           backdrop-filter: blur(16px);
-          font-size: 17px;
-          font-weight: 800;
+          font-size: 17px; font-weight: 800;
           white-space: nowrap;
         }
 
         .language-pill {
           position: absolute;
           z-index: 7;
-          left: 50%;
-          bottom: 178px;
+          left: 50%; bottom: 178px;
           transform: translateX(-50%);
-          display: flex;
-          align-items: center;
-          gap: 12px;
+          display: flex; align-items: center; gap: 12px;
           padding: 13px 20px;
           border-radius: 999px;
           background: rgba(0,0,0,0.72);
           backdrop-filter: blur(18px);
-          font-size: 16px;
-          font-weight: 800;
+          font-size: 16px; font-weight: 800;
           white-space: nowrap;
         }
 
@@ -762,18 +593,14 @@ export default function Home() {
         .camera-controls {
           position: absolute;
           z-index: 7;
-          left: 0;
-          right: 0;
-          bottom: 82px;
+          left: 0; right: 0; bottom: 82px;
           display: flex;
-          justify-content: center;
-          align-items: center;
+          justify-content: center; align-items: center;
           gap: 62px;
         }
 
         .round-control {
-          width: 70px;
-          height: 70px;
+          width: 70px; height: 70px;
           border-radius: 999px;
           border: none;
           background: rgba(255,255,255,0.13);
@@ -783,50 +610,25 @@ export default function Home() {
         }
 
         .shutter {
-          width: 96px;
-          height: 96px;
+          width: 96px; height: 96px;
           border-radius: 999px;
           border: none;
           background: rgba(255,255,255,0.18);
-          display: flex;
-          align-items: center;
-          justify-content: center;
+          display: flex; align-items: center; justify-content: center;
           backdrop-filter: blur(18px);
         }
 
         .shutter span {
-          width: 62px;
-          height: 62px;
+          width: 62px; height: 62px;
           border-radius: 999px;
           background: #fff;
           display: block;
         }
 
-        /* 직접 입력 버튼 */
-        .manual-entry-btn {
-          position: absolute;
-          z-index: 7;
-          left: 50%;
-          bottom: 155px;
-          transform: translateX(-50%);
-          border: none;
-          border-radius: 999px;
-          padding: 10px 20px;
-          background: rgba(255,255,255,0.15);
-          backdrop-filter: blur(18px);
-          color: #fff;
-          font-size: 14px;
-          font-weight: 800;
-          white-space: nowrap;
-          border: 1px solid rgba(255,255,255,0.25);
-        }
-
         .bottom-tabs {
           position: absolute;
           z-index: 7;
-          left: 0;
-          right: 0;
-          bottom: 18px;
+          left: 0; right: 0; bottom: 18px;
           display: grid;
           grid-template-columns: repeat(4, 1fr);
           padding: 0 18px;
@@ -836,12 +638,9 @@ export default function Home() {
           border: none;
           background: transparent;
           color: rgba(255,255,255,0.58);
-          display: flex;
-          flex-direction: column;
-          gap: 5px;
-          align-items: center;
-          font-size: 13px;
-          font-weight: 800;
+          display: flex; flex-direction: column;
+          gap: 5px; align-items: center;
+          font-size: 13px; font-weight: 800;
         }
 
         .bottom-tabs button span { font-size: 28px; }
@@ -852,26 +651,20 @@ export default function Home() {
           z-index: 20;
           inset: 0;
           background: #111;
-          display: flex;
-          flex-direction: column;
-          justify-content: center;
-          align-items: center;
-          gap: 14px;
-          color: #fff;
-          padding: 20px;
-          text-align: center;
+          display: flex; flex-direction: column;
+          justify-content: center; align-items: center;
+          gap: 14px; color: #fff;
+          padding: 20px; text-align: center;
         }
 
         .camera-fallback button {
-          border: none;
-          border-radius: 999px;
+          border: none; border-radius: 999px;
           padding: 12px 18px;
-          background: #fff;
-          color: #111;
+          background: #fff; color: #111;
           font-weight: 900;
         }
 
-        /* ── explain ── */
+        /* ── 해설 화면 ── */
         .explain-screen {
           min-height: 100vh;
           background:
@@ -885,14 +678,12 @@ export default function Home() {
 
         .explain-header {
           display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 26px;
+          justify-content: space-between; align-items: center;
+          margin-bottom: 18px;
         }
 
         .explain-header button {
-          width: 44px;
-          height: 44px;
+          width: 44px; height: 44px;
           border-radius: 999px;
           border: 1px solid #edeaf4;
           background: rgba(255,255,255,0.9);
@@ -903,53 +694,84 @@ export default function Home() {
 
         .explain-title-mini {
           text-align: center;
-          font-weight: 900;
-          font-size: 18px;
+          font-weight: 900; font-size: 18px;
           letter-spacing: -0.04em;
         }
 
         .explain-sub-mini {
           text-align: center;
           margin-top: 3px;
-          font-size: 10px;
-          color: #8c89a0;
+          font-size: 10px; color: #8c89a0;
           letter-spacing: 0.1em;
           text-transform: uppercase;
         }
 
-        /* explain 내 로딩 */
-        .inline-loading {
+        /* 확인 배너 */
+        .confirm-banner {
           display: flex;
-          flex-direction: column;
           align-items: center;
-          justify-content: center;
-          gap: 16px;
-          padding: 80px 20px;
-          color: #7254e8;
+          justify-content: space-between;
+          gap: 10px;
+          padding: 14px 16px;
+          border-radius: 20px;
+          background: linear-gradient(135deg, #fffbe6, #fff7ed);
+          border: 1.5px solid #ffd97a;
+          margin-bottom: 16px;
         }
 
-        .inline-loading p {
+        .confirm-left {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex: 1;
+          min-width: 0;
+        }
+
+        .confirm-emoji { font-size: 24px; flex-shrink: 0; }
+
+        .confirm-q {
+          margin: 0 0 2px;
+          font-size: 12px;
+          color: #9a7c30;
+          font-weight: 700;
+        }
+
+        .confirm-name {
           margin: 0;
           font-size: 15px;
-          font-weight: 700;
-          color: #7254e8;
+          font-weight: 900;
+          color: #2e2a1a;
+          letter-spacing: -0.03em;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
 
-        .inline-loading-dots {
+        .confirm-name span { color: #7a6030; font-weight: 600; }
+
+        .confirm-btns {
           display: flex;
-          gap: 8px;
+          gap: 7px;
+          flex-shrink: 0;
         }
 
-        .inline-loading-dots span {
-          width: 10px;
-          height: 10px;
-          border-radius: 50%;
-          background: #7254e8;
-          animation: bounce 1.2s infinite ease-in-out;
+        .confirm-yes {
+          border: none;
+          border-radius: 999px;
+          padding: 9px 14px;
+          background: #171729;
+          color: #fff;
+          font-size: 13px; font-weight: 900;
         }
 
-        .inline-loading-dots span:nth-child(2) { animation-delay: 0.2s; }
-        .inline-loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+        .confirm-no {
+          border: 1.5px solid #e0d0a0;
+          border-radius: 999px;
+          padding: 9px 14px;
+          background: #fff;
+          color: #7a6030;
+          font-size: 13px; font-weight: 800;
+        }
 
         .artwork-hero {
           padding: 24px;
@@ -963,32 +785,22 @@ export default function Home() {
           display: inline-flex;
           padding: 8px 12px;
           border-radius: 999px;
-          background: #f0eaff;
-          color: #7254e8;
-          font-size: 13px;
-          font-weight: 900;
+          background: #f0eaff; color: #7254e8;
+          font-size: 13px; font-weight: 900;
         }
 
         .artwork-hero h1 {
           margin: 16px 0 10px;
-          font-size: 38px;
-          line-height: 1.1;
+          font-size: 38px; line-height: 1.1;
           letter-spacing: -0.07em;
         }
 
-        .artist-line {
-          margin: 0;
-          color: #625f73;
-          font-size: 16px;
-          line-height: 1.55;
-        }
+        .artist-line { margin: 0; color: #625f73; font-size: 16px; line-height: 1.55; }
 
         .summary {
           margin: 18px 0 0;
-          font-size: 19px;
-          line-height: 1.55;
-          font-weight: 800;
-          letter-spacing: -0.04em;
+          font-size: 19px; line-height: 1.55;
+          font-weight: 800; letter-spacing: -0.04em;
         }
 
         .detected-info-box,
@@ -1001,35 +813,16 @@ export default function Home() {
           box-shadow: 0 14px 35px rgba(40,35,80,0.07);
         }
 
-        .section-title-row {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 12px;
-        }
-
         .section-title {
+          margin-bottom: 12px;
           color: #7254e8;
-          font-size: 17px;
-          font-weight: 900;
+          font-size: 17px; font-weight: 900;
           letter-spacing: -0.04em;
-        }
-
-        /* 수정 버튼 */
-        .edit-btn {
-          border: 1px solid #e0d8ff;
-          border-radius: 999px;
-          padding: 6px 14px;
-          background: #f4f0ff;
-          color: #7254e8;
-          font-size: 13px;
-          font-weight: 800;
         }
 
         .info-row {
           display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
+          justify-content: space-between; align-items: flex-start;
           gap: 16px;
           padding: 13px 0;
           border-bottom: 1px solid #eeeaf4;
@@ -1037,188 +830,158 @@ export default function Home() {
 
         .info-row:last-child { border-bottom: none; }
 
-        .info-row span {
-          color: #8a869c;
-          font-size: 14px;
-          font-weight: 800;
-          flex-shrink: 0;
-        }
+        .info-row span { color: #8a869c; font-size: 14px; font-weight: 800; flex-shrink: 0; }
+        .info-row strong { color: #171729; font-size: 15px; font-weight: 900; text-align: right; line-height: 1.4; }
 
-        .info-row strong {
-          color: #171729;
-          font-size: 15px;
-          font-weight: 900;
-          text-align: right;
-          line-height: 1.4;
-        }
-
-        .explain-card p {
-          margin: 0;
-          color: #444153;
-          font-size: 16px;
-          line-height: 1.75;
-        }
+        .explain-card p { margin: 0; color: #444153; font-size: 16px; line-height: 1.75; }
 
         .viewing-points { display: grid; gap: 12px; }
 
         .viewing-point { display: flex; gap: 12px; align-items: flex-start; }
 
         .viewing-point span {
-          width: 26px;
-          height: 26px;
+          width: 26px; height: 26px;
           border-radius: 50%;
-          background: #efeaff;
-          color: #7254e8;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 13px;
-          font-weight: 900;
+          background: #efeaff; color: #7254e8;
+          display: flex; align-items: center; justify-content: center;
+          font-size: 13px; font-weight: 900;
           flex-shrink: 0;
         }
 
-        .viewing-point p {
-          margin: 0;
-          color: #444153;
-          font-size: 16px;
-          line-height: 1.65;
-        }
+        .viewing-point p { margin: 0; color: #444153; font-size: 16px; line-height: 1.65; }
 
         .bottom-action-area {
           position: fixed;
-          left: 20px;
-          right: 20px;
-          bottom: 24px;
+          left: 20px; right: 20px; bottom: 24px;
           display: grid;
           grid-template-columns: 1fr 1fr;
           gap: 12px;
         }
 
-        .ghost-action,
-        .primary-action {
+        .ghost-action, .primary-action {
           border: none;
           border-radius: 22px;
           padding: 17px 14px;
-          font-size: 16px;
-          font-weight: 900;
+          font-size: 16px; font-weight: 900;
           box-shadow: 0 14px 35px rgba(45,35,90,0.18);
         }
 
-        .ghost-action {
-          background: #fff;
-          color: #7254e8;
-          border: 1px solid #e8e0ff;
-        }
+        .ghost-action { background: #fff; color: #7254e8; border: 1px solid #e8e0ff; }
+        .primary-action { background: linear-gradient(135deg, #7357ff, #bd43ff); color: #fff; }
 
-        .primary-action {
-          background: linear-gradient(135deg, #7357ff, #bd43ff);
-          color: #fff;
-        }
-
-        /* ── 모달 (직접입력 / 수정) ── */
-        .modal-backdrop {
-          position: fixed;
-          z-index: 40;
-          inset: 0;
-          background: rgba(0,0,0,0.5);
-          backdrop-filter: blur(4px);
-          display: flex;
-          align-items: flex-end;
-        }
-
-        .modal-sheet {
-          width: 100%;
-          padding: 12px 20px 36px;
-          border-radius: 30px 30px 0 0;
-          background: #fff;
+        /* ── 직접 입력 화면 ── */
+        .manual-screen {
+          min-height: 100vh;
+          background:
+            radial-gradient(circle at 20% 0%, #f4e8ff 0, transparent 30%),
+            radial-gradient(circle at 90% 0%, #defaff 0, transparent 26%),
+            #fbfbff;
           color: #171729;
-          box-shadow: 0 -20px 50px rgba(0,0,0,0.24);
-        }
-
-        .modal-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
-          gap: 12px;
-          margin-bottom: 24px;
-        }
-
-        .modal-header h3 {
-          margin: 0;
-          font-size: 22px;
-          letter-spacing: -0.04em;
-        }
-
-        .modal-header p {
-          margin: 5px 0 0;
-          color: #777184;
-          font-size: 13px;
-        }
-
-        .modal-header button {
-          width: 36px;
-          height: 36px;
-          border-radius: 999px;
-          border: none;
-          background: #f1eff7;
-          font-size: 22px;
-          color: #171729;
-          flex-shrink: 0;
-        }
-
-        .modal-body {
+          padding: 22px 22px 48px;
+          overflow-y: auto;
           display: flex;
           flex-direction: column;
-          gap: 8px;
-          margin-bottom: 20px;
+        }
+
+        .manual-header {
+          display: flex;
+          justify-content: space-between; align-items: center;
+          margin-bottom: 36px;
+        }
+
+        .manual-back {
+          width: 44px; height: 44px;
+          border-radius: 999px;
+          border: 1px solid #edeaf4;
+          background: rgba(255,255,255,0.9);
+          color: #171729;
+          font-size: 24px;
+          box-shadow: 0 8px 22px rgba(40,35,80,0.08);
+        }
+
+        .manual-body {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+        }
+
+        .manual-illust {
+          font-size: 64px;
+          text-align: center;
+          margin-bottom: 16px;
+        }
+
+        .manual-desc {
+          text-align: center;
+          font-size: 16px;
+          line-height: 1.65;
+          color: #5a5670;
+          margin: 0 0 36px;
         }
 
         .input-label {
-          font-size: 13px;
-          font-weight: 800;
+          font-size: 13px; font-weight: 800;
           color: #7254e8;
-          margin-top: 8px;
+          margin-bottom: 8px;
+          margin-top: 20px;
         }
 
-        .modal-input {
+        .input-label:first-of-type { margin-top: 0; }
+
+        .manual-input {
           width: 100%;
           border: 1.5px solid #e7e4ef;
           border-radius: 16px;
-          padding: 14px 16px;
+          padding: 16px 18px;
           font-size: 16px;
           font-family: inherit;
           outline: none;
           color: #171729;
+          background: #fff;
           transition: border-color 0.15s;
         }
 
-        .modal-input:focus { border-color: #7254e8; }
+        .manual-input:focus { border-color: #7254e8; }
 
-        .modal-submit {
+        .manual-submit {
+          margin-top: 32px;
           width: 100%;
           border: none;
           border-radius: 22px;
-          padding: 18px;
-          font-size: 17px;
-          font-weight: 900;
+          padding: 20px;
+          font-size: 17px; font-weight: 900;
           background: linear-gradient(135deg, #7357ff, #bd43ff);
           color: #fff;
-          box-shadow: 0 14px 35px rgba(45,35,90,0.18);
+          box-shadow: 0 14px 35px rgba(45,35,90,0.22);
           transition: opacity 0.15s;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 62px;
         }
 
-        .modal-submit:disabled {
-          opacity: 0.4;
-          cursor: not-allowed;
+        .manual-submit:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        /* 버튼 내 로딩 점 */
+        .btn-loading {
+          display: flex; gap: 6px; align-items: center;
         }
+
+        .btn-loading span {
+          width: 8px; height: 8px;
+          border-radius: 50%;
+          background: rgba(255,255,255,0.9);
+          animation: bounce 1.2s infinite ease-in-out;
+        }
+
+        .btn-loading span:nth-child(2) { animation-delay: 0.2s; }
+        .btn-loading span:nth-child(3) { animation-delay: 0.4s; }
 
         /* ── 채팅 시트 ── */
         .chat-sheet {
           position: fixed;
           z-index: 30;
-          left: 0;
-          right: 0;
-          bottom: 0;
+          left: 0; right: 0; bottom: 0;
           height: 58vh;
           padding: 12px 20px 24px;
           border-radius: 30px 30px 0 0;
@@ -1226,13 +989,11 @@ export default function Home() {
           color: #171729;
           backdrop-filter: blur(20px);
           box-shadow: 0 -20px 50px rgba(0,0,0,0.24);
-          display: flex;
-          flex-direction: column;
+          display: flex; flex-direction: column;
         }
 
         .sheet-handle {
-          width: 46px;
-          height: 5px;
+          width: 46px; height: 5px;
           border-radius: 999px;
           background: #d5d2df;
           margin: 0 auto 14px;
@@ -1240,26 +1001,15 @@ export default function Home() {
 
         .sheet-header {
           display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
+          justify-content: space-between; align-items: flex-start;
           gap: 12px;
         }
 
-        .sheet-header h3 {
-          margin: 0;
-          font-size: 22px;
-          letter-spacing: -0.04em;
-        }
-
-        .sheet-header p {
-          margin: 5px 0 0;
-          color: #777184;
-          font-size: 13px;
-        }
+        .sheet-header h3 { margin: 0; font-size: 22px; letter-spacing: -0.04em; }
+        .sheet-header p { margin: 5px 0 0; color: #777184; font-size: 13px; }
 
         .sheet-header button {
-          width: 36px;
-          height: 36px;
+          width: 36px; height: 36px;
           border-radius: 999px;
           border: none;
           background: #f1eff7;
@@ -1270,8 +1020,7 @@ export default function Home() {
           flex: 1;
           overflow-y: auto;
           margin-top: 18px;
-          display: flex;
-          flex-direction: column;
+          display: flex; flex-direction: column;
           gap: 10px;
           padding-bottom: 4px;
         }
@@ -1280,34 +1029,20 @@ export default function Home() {
           max-width: 84%;
           padding: 13px 15px;
           border-radius: 18px;
-          font-size: 14px;
-          line-height: 1.55;
+          font-size: 14px; line-height: 1.55;
         }
 
-        .bubble.ai {
-          background: #f3f1fb;
-          color: #333044;
-          border-top-left-radius: 6px;
-        }
-
-        .bubble.user {
-          align-self: flex-end;
-          background: #171729;
-          color: #fff;
-          border-top-right-radius: 6px;
-        }
+        .bubble.ai { background: #f3f1fb; color: #333044; border-top-left-radius: 6px; }
+        .bubble.user { align-self: flex-end; background: #171729; color: #fff; border-top-right-radius: 6px; }
 
         .loading-bubble {
-          display: flex;
-          align-items: center;
-          gap: 5px;
+          display: flex; align-items: center; gap: 5px;
           padding: 16px 18px;
           width: fit-content;
         }
 
         .loading-bubble span {
-          width: 7px;
-          height: 7px;
+          width: 7px; height: 7px;
           border-radius: 50%;
           background: #9b8fc7;
           animation: bounce 1.2s infinite ease-in-out;
@@ -1321,11 +1056,7 @@ export default function Home() {
           40%            { transform: translateY(-6px); opacity: 1; }
         }
 
-        .question-box {
-          display: flex;
-          gap: 8px;
-          margin-top: 14px;
-        }
+        .question-box { display: flex; gap: 8px; margin-top: 14px; }
 
         .question-box input {
           flex: 1;
@@ -1343,10 +1074,8 @@ export default function Home() {
           width: 50px;
           border-radius: 18px;
           border: none;
-          background: #7d55ea;
-          color: #fff;
-          font-size: 20px;
-          font-weight: 900;
+          background: #7d55ea; color: #fff;
+          font-size: 20px; font-weight: 900;
           transition: opacity 0.15s;
         }
 
@@ -1356,10 +1085,10 @@ export default function Home() {
         @media (min-width: 700px) {
           .app,
           .camera-screen,
-          .explain-screen {
+          .explain-screen,
+          .manual-screen {
             width: 430px;
-            height: 860px;
-            min-height: 860px;
+            height: 860px; min-height: 860px;
             margin: 24px auto;
             border-radius: 42px;
             border: 8px solid #111;
@@ -1368,19 +1097,11 @@ export default function Home() {
           }
 
           .chat-sheet {
-            left: 50%;
-            right: auto;
+            left: 50%; right: auto;
             width: 430px;
             transform: translateX(-50%);
             bottom: 24px;
             border-radius: 30px;
-          }
-
-          .modal-backdrop { justify-content: center; align-items: flex-end; }
-
-          .modal-sheet {
-            width: 430px;
-            border-radius: 30px 30px 0 0;
           }
 
           body { background: #eef8f9; }
