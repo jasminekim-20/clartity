@@ -364,22 +364,30 @@ export default function Home() {
 
             <div className="info-row">
               <span>작품명</span>
-              <strong>{artwork.title || "확인 필요"}</strong>
+              <strong>
+                {artwork.title || "작품명 정보가 명확하지 않습니다"}
+              </strong>
             </div>
 
             <div className="info-row">
               <span>작가</span>
-              <strong>{artwork.artist || "확인 필요"}</strong>
+              <strong>
+                {artwork.artist || "작가 정보가 명확하지 않습니다"}
+              </strong>
             </div>
 
             <div className="info-row">
               <span>제작연도</span>
-              <strong>{artwork.year || "확인 필요"}</strong>
+              <strong>
+                {artwork.year || "제작연도 정보가 명확하지 않습니다"}
+              </strong>
             </div>
 
             <div className="info-row">
               <span>소장처</span>
-              <strong>{artwork.museum || "확인 필요"}</strong>
+              <strong>
+                {artwork.museum || "소장처 정보가 명확하지 않습니다"}
+              </strong>
             </div>
           </section>
 
